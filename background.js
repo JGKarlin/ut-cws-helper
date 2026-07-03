@@ -110,6 +110,36 @@ async function updateBadge(count) {
   } catch (_) {}
 }
 
+// ── Activity spinner (toolbar indicator while a hidden background run is active) ──
+// A background run opens an invisible tab, so animate the toolbar badge to show it's
+// working. The service worker is kept alive by the run's open tab + pending awaits, so
+// the interval ticks for the run's duration. stopActivitySpinner restores the normal
+// (ready-months) badge.
+const SPINNER_FRAMES = ['◐', '◓', '◑', '◒'];
+const SPINNER_COLOR = '#1a3a6b';
+let spinnerTimer = null;
+
+function startActivitySpinner() {
+  if (spinnerTimer) return;
+  let i = 0;
+  const tick = () => {
+    try {
+      chrome.action.setBadgeBackgroundColor({ color: SPINNER_COLOR });
+      chrome.action.setBadgeText({ text: SPINNER_FRAMES[i % SPINNER_FRAMES.length] });
+    } catch (_) {}
+    i++;
+  };
+  tick();
+  spinnerTimer = setInterval(tick, 250);
+  try { chrome.action.setTitle({ title: '勤務時間 自動入力：実行中…' }); } catch (_) {}
+}
+
+async function stopActivitySpinner() {
+  if (spinnerTimer) { clearInterval(spinnerTimer); spinnerTimer = null; }
+  try { chrome.action.setTitle({ title: '勤務時間 自動入力' }); } catch (_) {}
+  await recomputeTermReady(); // restore the normal badge (ready-months count or clear)
+}
+
 function computeReadyMonths(cache, pendingMonth) {
   const months = (cache && cache.months) || {};
   const current = (cache && cache.currentMonth) || thisCalMonthKey();
@@ -188,13 +218,13 @@ async function handleTermObserved(msg) {
 async function refreshDailyAlarm() {
   let need = false;
   try {
-    const s = await chrome.storage.local.get(['hrPendingSubmit', 'hrAutoSubmitEnabled']);
-    need = !!s.hrPendingSubmit || !!s.hrAutoSubmitEnabled;
+    const s = await chrome.storage.local.get(['hrPendingSubmit', 'hrAutoSubmitEnabled', 'hrAutoEntryEnabled']);
+    need = !!s.hrPendingSubmit || !!s.hrAutoSubmitEnabled || !!s.hrAutoEntryEnabled;
   } catch (_) {}
   try {
     const existing = await chrome.alarms.get(RETRY_ALARM);
     if (need && !existing) {
-      chrome.alarms.create(RETRY_ALARM, { periodInMinutes: 240, delayInMinutes: 30 });
+      chrome.alarms.create(RETRY_ALARM, { periodInMinutes: 240, delayInMinutes: 1 });
     } else if (!need && existing) {
       await chrome.alarms.clear(RETRY_ALARM);
     }
@@ -247,8 +277,13 @@ async function driveSubmitInBackgroundTab(sub) {
   retryInProgress = true;
   let tabId = null;
   try {
-    await chrome.storage.session.remove('hrAutoProgress');
+    // Clear stale scan state so the workday-scan navigation always starts fresh. A prior
+    // run that stalled/timed out mid-scan can leave hrScanNavStep set (e.g. 'main'), which
+    // makes clickWorkdayCalendarLink think it already reached the work menu and wait forever
+    // for a 本人用実績 link that isn't on the current (勤務表) page — the 2% stall.
+    await chrome.storage.session.remove(['hrAutoProgress', 'hrScanNavStep', 'hrTermScan']);
     await chrome.storage.session.set({ hrSubmitState: sub });
+    startActivitySpinner(); // toolbar indicator: a hidden run is now working
 
     const tab = await chrome.tabs.create({ url: MAIN_CWS_URL, active: false });
     tabId = tab.id;
@@ -275,7 +310,7 @@ async function driveSubmitInBackgroundTab(sub) {
   } finally {
     if (tabId != null) { try { await chrome.tabs.remove(tabId); } catch (_) {} }
     try { await chrome.storage.session.remove('hrSubmitState'); } catch (_) {}
-    await recomputeTermReady(); // a just-submitted month is no longer "ready"
+    await stopActivitySpinner(); // stop the toolbar spinner + restore the ready-months badge
     retryInProgress = false;
   }
 }
@@ -312,12 +347,28 @@ async function runAutoSubmitCheck() {
   });
 }
 
+// Opt-in: keep the CURRENT month's hours filled — independent of the submission gate.
+// Enters any past-or-present workday that still lacks times (holiday-aware; never
+// overwrites existing records — detectHoursComplete drives which days are missing).
+// Runs even while a 月次申請 is blocked on a prior month's approval, so July's daily
+// entry is never held up by an unapproved May/June.
+async function runCurrentMonthEntryCheck() {
+  const target = thisCalMonthKey();
+  await driveSubmitInBackgroundTab({
+    queue: [target], queueIndex: 0, targetMonth: target, phase: 'submit-nav',
+    config: await getTermConfig(), workdaysByMonth: {}, navStep: null,
+    auto: true, entryOnly: true,
+  });
+}
+
 async function runDailyCheck() {
-  const s = await chrome.storage.local.get(['hrPendingSubmit', 'hrAutoSubmitEnabled']);
-  if (!s.hrPendingSubmit && !s.hrAutoSubmitEnabled) { await refreshDailyAlarm(); return; }
+  const s = await chrome.storage.local.get(['hrPendingSubmit', 'hrAutoSubmitEnabled', 'hrAutoEntryEnabled']);
+  if (!s.hrPendingSubmit && !s.hrAutoSubmitEnabled && !s.hrAutoEntryEnabled) { await refreshDailyAlarm(); return; }
   // Only act when CWS is actually reachable (campus or VPN). Off-network, skip quietly
   // without opening a tab — the next daily alarm will try again.
   if (!(await isConnected())) return;
+  // Current-month hours entry runs first and independently of the submission gate.
+  if (s.hrAutoEntryEnabled) await runCurrentMonthEntryCheck();
   if (s.hrPendingSubmit) { await runPendingRetry(); return; }
   await runAutoSubmitCheck();
 }
@@ -327,11 +378,11 @@ async function runDailyCheck() {
 // resume the submission now instead of waiting for the next alarm.
 async function onCwsReady() {
   let s;
-  try { s = await chrome.storage.local.get(['hrLoginNeededSince', 'hrPendingSubmit', 'hrAutoSubmitEnabled']); }
+  try { s = await chrome.storage.local.get(['hrLoginNeededSince', 'hrPendingSubmit', 'hrAutoSubmitEnabled', 'hrAutoEntryEnabled']); }
   catch (_) { return; }
   if (!s.hrLoginNeededSince) return;
   try { await chrome.storage.local.remove('hrLoginNeededSince'); } catch (_) {}
-  if (!s.hrPendingSubmit && !s.hrAutoSubmitEnabled) return;
+  if (!s.hrPendingSubmit && !s.hrAutoSubmitEnabled && !s.hrAutoEntryEnabled) return;
   runDailyCheck();
 }
 
@@ -363,7 +414,7 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'TERM_STATUS_REFRESHED' || msg.type === 'TERM_READY_RECOMPUTE') { recomputeTermReady(); return; }
   // These reconcile the daily alarm; the pending/cleared ones also change readiness.
   if (msg.type === 'TERM_SCHEDULE_RETRY' || msg.type === 'TERM_CLEAR_RETRY' ||
-      msg.type === 'AUTO_SUBMIT_SCHEDULE') { refreshDailyAlarm(); recomputeTermReady(); return; }
+      msg.type === 'AUTO_SUBMIT_SCHEDULE' || msg.type === 'AUTO_ENTRY_SCHEDULE') { refreshDailyAlarm(); recomputeTermReady(); return; }
   if (msg.type === 'TERM_RUN_RETRY_NOW') { runDailyCheck(); return; }
 });
 
@@ -379,6 +430,14 @@ chrome.notifications.onClicked.addListener((id) => {
   try { chrome.notifications.clear(id); } catch (_) {}
 });
 
-// Re-arm the alarm and re-apply the badge on browser startup / install based on state.
-chrome.runtime.onStartup.addListener(() => { refreshDailyAlarm(); recomputeTermReady(); });
-chrome.runtime.onInstalled.addListener(() => { refreshDailyAlarm(); recomputeTermReady(); });
+// Re-arm the alarm, re-apply the badge, AND run a check now on browser startup / install
+// / extension reload — so auto-entry / auto-submit act immediately instead of waiting up
+// to the full alarm interval. runDailyCheck self-gates on connectivity + enabled flags.
+chrome.runtime.onStartup.addListener(() => { refreshDailyAlarm(); recomputeTermReady(); runDailyCheck(); });
+chrome.runtime.onInstalled.addListener(() => { refreshDailyAlarm(); recomputeTermReady(); runDailyCheck(); });
+
+// The side panel opened and reported it's ready → run a check now (guarded), so opening
+// the panel is itself a trigger rather than relying on the alarm/checkbox.
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg && msg.type === 'PANEL_OPENED') runDailyCheck();
+});

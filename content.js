@@ -644,56 +644,46 @@ async function clearWorkdayScanNavStep() {
   } catch {}
 }
 
-/** Navigate toward 本人用実績入力. Flow: 就労管理 → 本人用実績 → 本人用実績入力. */
+// Find an <a> whose (whitespace-stripped) text satisfies pred.
+function findLinkByTextPred(pred) {
+  return findNavigationElement((el, t) => el.tagName === 'A' && pred(t));
+}
+
+/** Navigate toward 本人用実績入力 by LINK TEXT — robust to the site's changing @FN
+ *  session tokens and nth-child layout (the hardcoded href/selector approach broke
+ *  when @FN changed). Path: 勤務表 →(就労メインページ)→ 本人用メニュー →(本人用実績)→
+ *  本人用実績 →(本人用実績入力)→ カレンダー. Stateless: each call clicks the deepest
+ *  link present on the current page, so it converges regardless of where it starts.
+ *  Every branch performs a real navigation (clicked:true) → the state machine
+ *  re-enters on the resulting page load. */
 async function clickWorkdayCalendarLink() {
   if (isWorkdayCalendarPage()) {
     await clearWorkdayScanNavStep();
     return { ready: true };
   }
 
-  const navStep = await getWorkdayScanNavStep();
-
-  const workMenuLink = findLinkBySelectorOrHref(WORK_MENU_LINK_SELECTOR, WORK_MENU_LINK_HREF);
-  if (workMenuLink && !['main', 'performance', 'input'].includes(navStep) && activateElement(workMenuLink)) {
-    await setWorkdayScanNavStep('main');
-    return { navigating: true, step: '就労管理ページへ移動中...', waitMs: 1800 };
+  // 1. Final hop: the 本人用実績入力 link (on the 本人用実績 page).
+  const inputLink = findLinkByTextPred(t => t.includes('本人用実績入力'));
+  if (inputLink && activateElement(inputLink)) {
+    return { navigating: true, clicked: true, step: '本人用実績入力へ移動中...', waitMs: 1500 };
   }
 
-  if (!isMainWorkMenuContext() && !['main', 'performance', 'input'].includes(navStep)) {
-    window.location.href = MAIN_CWS_URL;
-    return { navigating: true, step: '就労管理ページへ移動中...', waitMs: 1800 };
+  // 2. The 本人用実績 link (on the 本人用メニュー) — exclude 本人用実績入力.
+  const perfLink = findLinkByTextPred(t => t.includes('本人用実績') && !t.includes('本人用実績入力'));
+  if (perfLink && activateElement(perfLink)) {
+    return { navigating: true, clicked: true, step: '本人用実績メニューへ移動中...', waitMs: 1500 };
   }
 
-  const performanceLink = findLinkBySelectorOrHref(PERFORMANCE_LINK_SELECTOR, PERFORMANCE_LINK_HREF);
-  if (performanceLink && !['performance', 'input'].includes(navStep) && activateElement(performanceLink)) {
-    await setWorkdayScanNavStep('performance');
-    return { navigating: true, step: '本人用実績メニューへ移動中...', waitMs: 1200 };
-  }
-  if (performanceLink && (navStep === 'main' || navStep === 'performance')) {
-    return { navigating: true, step: '本人用実績メニューの読み込み待ち...', waitMs: 1200 };
+  // 3. Back to the 本人用メニュー via 就労メインページ (present on the 勤務表 etc.).
+  const menuLink = findLinkByTextPred(t =>
+    t.includes('就労メインページ') || t.includes('本人用メニュー') || t.includes('メインページ'));
+  if (menuLink && activateElement(menuLink)) {
+    return { navigating: true, clicked: true, step: '就労メインページへ移動中...', waitMs: 1500 };
   }
 
-  const inputLink = findLinkBySelectorOrHref(MATRIX_INPUT_LINK_SELECTOR, MATRIX_INPUT_LINK_HREF);
-  if (inputLink && (navStep === 'performance' || isPerformanceMenuContext()) && activateElement(inputLink)) {
-    await setWorkdayScanNavStep('input');
-    return { navigating: true, step: '本人用実績入力へ移動中...', waitMs: 1200 };
-  }
-  if (inputLink && navStep === 'input') {
-    return { navigating: true, step: '本人用実績入力の読み込み待ち...', waitMs: 1200 };
-  }
-
-  if (navStep === 'main' && isMainWorkMenuContext()) {
-    return { navigating: true, step: '本人用実績リンクの出現待ち...', waitMs: 1000 };
-  }
-  if (navStep === 'performance') {
-    return { navigating: true, step: '本人用実績入力リンクの出現待ち...', waitMs: 1000 };
-  }
-
-  return {
-    navigating: true,
-    step: '本人用実績リンクの出現待ち...',
-    waitMs: 1000,
-  };
+  // 4. Nothing recognizable on this page — reload the main CWS page and retry.
+  window.location.href = MAIN_CWS_URL;
+  return { navigating: true, clicked: true, step: '就労メインページへ移動中...', waitMs: 1800 };
 }
 
 function fireEvent(el, eventName) {
@@ -1277,7 +1267,9 @@ async function runSubmitStateMachine(sub) {
           const next = await updateSubmit(sub, { phase: 'submit-ensure-month' });
           return runSubmitStateMachine(next);
         }
-        if (!isMonthSubmittable()) {
+        // Entry-only (current-month hours fill) skips the submittable gate: the current
+        // month isn't in a submission window yet, but we still enter its worked days.
+        if (!sub.entryOnly && !isMonthSubmittable()) {
           // Already submitted or window closed — a quiet no-op for the unattended auto run.
           return abortSubmit(sub, `${labelOf(sub)} は月次申請の対象外です（提出期限切れ、または既に申請済みです）。`);
         }
@@ -1290,6 +1282,12 @@ async function runSubmitStateMachine(sub) {
         const res = detectHoursComplete(workdays);
         if (res.error) { sendError(res.error); return clearSubmit(); }
         if (res.complete) {
+          if (sub.entryOnly) {
+            // Hours-entry only — nothing to submit. We're done for this month.
+            clearSubmit();
+            sendDone(`${labelOf(sub)} の勤務時間はすべて入力済みです。`);
+            return;
+          }
           // Hours done. Verify the previous period is approved before submitting (unless already checked).
           const next = await updateSubmit(sub, { phase: sub.prechecked ? 'submit-click' : 'submit-precheck' });
           return runSubmitStateMachine(next);
@@ -1319,7 +1317,17 @@ async function runSubmitStateMachine(sub) {
           const r = await clickWorkdayCalendarLink(); // multi-step nav across reloads
           if (!r || !r.ready) {
             sendProgress(`${labelOf(sub)}：平日を確認中...（${(r && r.step) || ''}）`, submitPercent(sub, 2));
-            return; // navigation in flight; re-enter on next page load
+            // A real navigation (clicked) reloads the page and re-enters us automatically.
+            // A passive wait (link not present yet) will NOT reload — re-poll ourselves so
+            // we don't stall forever (bounded; the background tab also times out at 3 min).
+            if (r && !r.clicked) {
+              const polls = (sub._scanPolls || 0) + 1;
+              if (polls > 25) {
+                return abortSubmit(sub, `${labelOf(sub)} の本人用実績入力ページへ移動できませんでした。次回の自動チェックで再試行します。`);
+              }
+              setTimeout(() => { runSubmitStateMachine({ ...sub, _scanPolls: polls }); }, (r && r.waitMs) || 1000);
+            }
+            return; // clicked → re-enter on next page load
           }
         }
         let dates;

@@ -268,6 +268,10 @@ async function refreshOnDomainUI() {
   setDefaultDates();
   await restoreTermTimeConfig(); // show the saved 出退勤 time range (also used by 月次申請)
   await refreshOnDomainUI();
+  // Opening the panel is a trigger: ask the background to run a check now (it self-gates
+  // on connectivity + enabled flags, and opens its own hidden CWS tab — no need to be on
+  // the CWS page). This is what actually kicks auto-entry without waiting for the alarm.
+  try { chrome.runtime.sendMessage({ type: 'PANEL_OPENED' }); } catch (_) {}
 })();
 
 // The side panel stays open across tab switches/navigations, so re-check the on-domain
@@ -890,6 +894,35 @@ const TERM_AUTO_KEY = 'hrAutoSubmitEnabled';
     }
     applyAutoSubmitUI();
     try { chrome.runtime.sendMessage({ type: 'AUTO_SUBMIT_SCHEDULE' }); } catch (_) {}
+  });
+})();
+
+// ── Opt-in: 今月の勤務時間を自動入力する (off by default) ─────────────────────────
+// Independent of 月次申請 — keeps the CURRENT month's hours filled even while a prior
+// month's submission is blocked on approval. The background alarm does the work.
+const TERM_ENTRY_KEY = 'hrAutoEntryEnabled';
+(async () => {
+  const el = document.getElementById('autoEntryToggle');
+  if (!el) return;
+  document.getElementById('entryCard').style.display = 'block';
+  const stored = (await chrome.storage.local.get(TERM_ENTRY_KEY))[TERM_ENTRY_KEY];
+  el.checked = !!stored;
+  el.addEventListener('change', async () => {
+    if (el.checked) {
+      const ok = window.confirm(
+        '今月の勤務時間を自動で入力します。\n\n' +
+        '出勤日のうち未入力の日を、出退勤設定の時刻で入力します。' +
+        '前月の承認・月次申請の状況とは無関係に実行します。\n\n' +
+        '有効にしますか？'
+      );
+      if (!ok) { el.checked = false; return; }
+      await chrome.storage.local.set({ [TERM_ENTRY_KEY]: true });
+      try { chrome.runtime.sendMessage({ type: 'AUTO_ENTRY_SCHEDULE' }); } catch (_) {}
+      try { chrome.runtime.sendMessage({ type: 'TERM_RUN_RETRY_NOW' }); } catch (_) {} // fill now, don't wait for the alarm
+    } else {
+      await chrome.storage.local.set({ [TERM_ENTRY_KEY]: false });
+      try { chrome.runtime.sendMessage({ type: 'AUTO_ENTRY_SCHEDULE' }); } catch (_) {}
+    }
   });
 })();
 

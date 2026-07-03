@@ -160,13 +160,14 @@
     }
     .status-row {
       display: flex; align-items: flex-start;
-      justify-content: space-between; margin-bottom: 6px;
+      justify-content: space-between; margin-bottom: 6px; gap: 8px;
     }
     .status-text {
+      flex: 1 1 auto; min-width: 0;
       font-size: 11px; color: #4a5568; font-weight: 500;
-      white-space: pre-line; line-height: 1.5;
+      white-space: pre-line; line-height: 1.5; word-break: break-word;
     }
-    .status-percent { font-size: 11px; color: #1a3a6b; font-weight: 700; }
+    .status-percent { flex: 0 0 auto; font-size: 11px; color: #1a3a6b; font-weight: 700; white-space: nowrap; }
 
     progress {
       width: 100%; height: 6px; border-radius: 3px;
@@ -195,6 +196,7 @@
 
     /* ── 月次申請 card ──────────────────────────── */
     #termCard { display: none; margin-top: 10px; }
+    #entryCard { display: none; margin-top: 10px; }
     .term-status { font-size: 11px; color: #4a5568; margin-bottom: 9px; line-height: 1.5; }
     .term-item { margin-bottom: 8px; }
     .term-item:last-child { margin-bottom: 0; }
@@ -270,6 +272,16 @@
     </label>
     <div id="termStatus" class="term-status">未提出の月を確認中...</div>
     <div id="termList"></div>
+  </div>
+
+  <!-- 勤務時間の自動入力 (current month) — independent of 月次申請 -->
+  <div class="card" id="entryCard">
+    <div class="card-label">勤務時間の自動入力</div>
+    <label class="term-toggle" for="autoEntryToggle">
+      <input type="checkbox" id="autoEntryToggle">
+      <span>今月の勤務時間を自動入力する</span>
+    </label>
+    <div class="term-status">出勤日のうち未入力の日を、出退勤設定の時刻で自動入力します。前月の承認・月次申請の状況とは無関係に実行します。</div>
   </div>
 
   <!-- Not on domain message -->
