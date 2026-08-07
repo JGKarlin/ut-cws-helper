@@ -20,24 +20,62 @@
     return match ? Number(match[1]) : null;
   }
 
-  function findMissingWorkdays(workdays, rowFacts) {
-    const factsByDay = new Map();
+  function factsByDay(rowFacts) {
+    const result = new Map();
     (Array.isArray(rowFacts) ? rowFacts : []).forEach(fact => {
       if (!fact || fact.day == null) return;
       const day = Number(fact.day);
       if (!Number.isInteger(day) || day < 1 || day > 31) return;
-      const facts = factsByDay.get(day) || [];
+      const facts = result.get(day) || [];
       facts.push(fact);
-      factsByDay.set(day, facts);
+      result.set(day, facts);
+    });
+    return result;
+  }
+
+  function planMissingEntries(workdays, rowFacts) {
+    const byDay = factsByDay(rowFacts);
+    const tasks = [];
+
+    (Array.isArray(workdays) ? workdays : []).forEach(workday => {
+      const date = String(workday || '');
+      const day = dayFromWorkday(date);
+      const facts = day === null ? [] : (byDay.get(day) || []);
+      if (facts.some(fact => isFullDayPaidLeave(fact.rowText))) return;
+
+      if (!facts.length) {
+        tasks.push(
+          { date, phase: 'clockin' },
+          { date, phase: 'clockout' },
+          { date, phase: 'break' }
+        );
+        return;
+      }
+
+      const hasArrival = facts.some(fact => fact.hasArrival === true);
+      const hasDeparture = facts.some(fact => fact.hasDeparture === true);
+      const breakObserved = facts.some(fact => typeof fact.hasBreak === 'boolean');
+      const hasBreak = facts.some(fact => fact.hasBreak === true);
+      if (!hasArrival) tasks.push({ date, phase: 'clockin' });
+      if (!hasDeparture) tasks.push({ date, phase: 'clockout' });
+      if (breakObserved && !hasBreak) tasks.push({ date, phase: 'break' });
     });
 
-    return (Array.isArray(workdays) ? workdays : []).filter(workday => {
-      const day = dayFromWorkday(workday);
-      const facts = day === null ? [] : (factsByDay.get(day) || []);
-      if (!facts.length) return true;
-      if (facts.some(fact => isFullDayPaidLeave(fact.rowText))) return false;
-      if (facts.some(fact => fact.hasArrival && fact.hasDeparture)) return false;
-      return true;
+    return tasks;
+  }
+
+  function findMissingWorkdays(workdays, rowFacts) {
+    return Array.from(new Set(planMissingEntries(workdays, rowFacts).map(task => task.date)));
+  }
+
+  function advancePlannedEntryState(state) {
+    if (!state || !Array.isArray(state.taskPhases)) return undefined;
+    const nextIndex = Number(state.dateIndex || 0) + 1;
+    if (nextIndex >= state.taskPhases.length || nextIndex >= (state.dates || []).length) return null;
+    return Object.assign({}, state, {
+      dateIndex: nextIndex,
+      phase: state.taskPhases[nextIndex],
+      config: Object.assign({}, state.config || {})
     });
   }
 
@@ -62,5 +100,11 @@
     return Array.from(dates).sort();
   }
 
-  return { isFullDayPaidLeave, findMissingWorkdays, findScheduledWorkdays };
+  return {
+    isFullDayPaidLeave,
+    findMissingWorkdays,
+    findScheduledWorkdays,
+    planMissingEntries,
+    advancePlannedEntryState
+  };
 });

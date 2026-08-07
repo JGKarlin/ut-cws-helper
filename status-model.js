@@ -309,6 +309,13 @@
     return { defer: fresh, stale: !fresh };
   }
 
+  function backgroundAutomationTimeoutMs() {
+    // A full month is roughly 20 workdays × three separate CWS submissions.
+    // The live site takes about 9–12 seconds per submission, so three minutes
+    // truncates normal runs. Twenty minutes includes navigation and retry margin.
+    return 20 * 60 * 1000;
+  }
+
   return {
     buildMonthRows,
     statusEventsFromSnapshot,
@@ -321,6 +328,7 @@
     cwsScanActive,
     shouldRunStatusScan,
     cwsAutomationStartupCleanupKeys,
-    planCwsScanLock
+    planCwsScanLock,
+    backgroundAutomationTimeoutMs
   };
 });

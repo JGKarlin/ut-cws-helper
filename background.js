@@ -21,7 +21,10 @@ try {
 
 const MAIN_CWS_URL = 'https://ut-ppsweb.adm.u-tokyo.ac.jp/cws/cws';
 const RETRY_ALARM = 'hrTermRetry';
-const RETRY_TIMEOUT_MS = 180000; // give a background retry up to 3 min, then close the tab
+const RETRY_TIMEOUT_MS = globalThis.HRStatusModel &&
+  typeof globalThis.HRStatusModel.backgroundAutomationTimeoutMs === 'function'
+  ? globalThis.HRStatusModel.backgroundAutomationTimeoutMs()
+  : 20 * 60 * 1000;
 const TERM_HISTORY_KEY = 'hrTermStatusHistory';
 const BACKGROUND_RUN_KEY = 'hrBackgroundRun';
 const USER_ACTION_KEY = 'hrUserActionRequired';

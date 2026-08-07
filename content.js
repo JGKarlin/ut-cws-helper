@@ -403,6 +403,9 @@ function phaseOffset(state) {
   return state.phase === 'clockin' ? 0 : state.phase === 'clockout' ? 1 : 2;
 }
 function calcProgress(state) {
+  if (Array.isArray(state.taskPhases)) {
+    return Math.round(((state.dateIndex || 0) / Math.max(1, state.dates.length)) * 100);
+  }
   const totalEntries = state.dates.length * ENTRIES_PER_DAY;
   const completed = (state.dateIndex * ENTRIES_PER_DAY) + phaseOffset(state);
   return Math.round((completed / totalEntries) * 100);
@@ -413,14 +416,20 @@ function progressText(state) {
     : state.phase === 'clockout' ? '自己申告記録（退勤）'
     : '勤務外時間数（休憩）';
   const dateStr = state.dates[state.dateIndex];
-  const current = (state.dateIndex * ENTRIES_PER_DAY) + phaseOffset(state) + 1;
-  const total = state.dates.length * ENTRIES_PER_DAY;
+  const planned = Array.isArray(state.taskPhases);
+  const current = planned ? state.dateIndex + 1 : (state.dateIndex * ENTRIES_PER_DAY) + phaseOffset(state) + 1;
+  const total = planned ? state.dates.length : state.dates.length * ENTRIES_PER_DAY;
   return `${phaseLabel}：${dateStr}（${current}/${total}）`;
 }
 
 // ── Advance State ─────────────────────────────────────────────────────────────
 // Returns the next state, or null if all entries are done.
 function advanceState(state) {
+  const hoursModel = globalThis.HRTermHours;
+  if (Array.isArray(state.taskPhases) && hoursModel &&
+      typeof hoursModel.advancePlannedEntryState === 'function') {
+    return hoursModel.advancePlannedEntryState(state);
+  }
   const next = { ...state, config: { ...state.config } };
 
   if (state.phase === 'clockin')  { next.phase = 'clockout'; return next; }
@@ -515,8 +524,19 @@ async function runStateMachine() {
           clickReturnLink();
         } else {
           // All entries complete
-          safeSessionRemove('hrAutoState');
-          sendDone(`${state.dates.length}勤務日の自己申告記録（出勤・退勤）と勤務外時間数（休憩）の登録が完了しました（${state.dates.length * 3}件）。`);
+          await chrome.storage.session.remove('hrAutoState');
+          const pendingSubmit = (await chrome.storage.session.get('hrSubmitState')).hrSubmitState;
+          if (pendingSubmit && pendingSubmit.phase === 'submit-entering') {
+            await chrome.storage.session.set({
+              hrSubmitState: { ...pendingSubmit, phase: 'submit-nav' }
+            });
+            sendProgress(`${formatMonthLabel(pendingSubmit.targetMonth)}：入力結果を勤務表で再確認中...`, submitPercent(pendingSubmit, 60));
+            clickReturnLink();
+          } else {
+            const uniqueDays = new Set(state.dates).size;
+            const entryCount = Array.isArray(state.taskPhases) ? state.taskPhases.length : state.dates.length * 3;
+            sendDone(`${uniqueDays}勤務日の未入力記録の登録が完了しました（${entryCount}件）。`);
+          }
         }
         break;
       }
@@ -987,7 +1007,13 @@ function detectTermTable() {
       const inCol = hs.findIndex(x => x.indexOf('自己申告記録（出勤') !== -1);
       if (inCol !== -1) {
         const outCol = hs.findIndex(x => x.indexOf('自己申告記録（退勤') !== -1);
-        return { table: t, inCol, outCol: outCol !== -1 ? outCol : inCol + 1 };
+        const breakCol = hs.findIndex(x => x.indexOf('勤務外時間数') !== -1);
+        return {
+          table: t,
+          inCol,
+          outCol: outCol !== -1 ? outCol : inCol + 1,
+          breakCol: breakCol !== -1 ? breakCol : null
+        };
       }
     }
   }
@@ -1049,15 +1075,16 @@ function detectHoursComplete(workdays) {
   const info = detectTermTable();
   if (!info) return { complete: false, missing: [], error: '勤務表の勤務時間表が見つかりません' };
   const hoursModel = globalThis.HRTermHours;
-  if (!hoursModel || typeof hoursModel.findMissingWorkdays !== 'function') {
+  if (!hoursModel || typeof hoursModel.planMissingEntries !== 'function') {
     return { complete: false, missing: [], error: '勤務時間の安全判定モデルを読み込めませんでした' };
   }
-  const { table, inCol, outCol } = info;
+  const { table, inCol, outCol, breakCol } = info;
   const timeRe = /\d{1,2}時\d{1,2}分/;
+  const breakRe = /(?:\d{1,2}:\d{2}|\d{1,2}時\d{1,2}分)/;
   const rowFacts = [];
   for (const row of table.rows) {
     const cells = row.cells;
-    if (cells.length <= Math.max(inCol, outCol)) continue;
+    if (cells.length <= Math.max(inCol, outCol, breakCol == null ? 0 : breakCol)) continue;
     const d0 = normalizeDigits(cells[0].textContent || '').trim();
     if (d0.indexOf('月日') !== -1 || d0.indexOf('曜日') !== -1) continue;
     let dd = null;
@@ -1067,15 +1094,18 @@ function detectHoursComplete(workdays) {
     if (dd == null || dd < 1 || dd > 31) continue;
     const inT = normalizeDigits(cells[inCol].textContent || '');
     const outT = normalizeDigits(cells[outCol].textContent || '');
+    const breakT = breakCol == null ? '' : normalizeDigits(cells[breakCol].textContent || '');
     rowFacts.push({
       day: dd,
       hasArrival: timeRe.test(inT),
       hasDeparture: timeRe.test(outT),
+      hasBreak: breakCol == null ? undefined : breakRe.test(breakT),
       rowText: normalizeDigits(row.textContent || '')
     });
   }
-  const missing = hoursModel.findMissingWorkdays(workdays, rowFacts);
-  return { complete: missing.length === 0, missing };
+  const tasks = hoursModel.planMissingEntries(workdays, rowFacts);
+  const missing = Array.from(new Set(tasks.map(task => task.date)));
+  return { complete: tasks.length === 0, missing, tasks };
 }
 
 // Read a month's approval status from the 【処理状況】 table (located by its header
@@ -1394,14 +1424,25 @@ async function runSubmitStateMachine(sub) {
         if (res.complete) {
           if (sub.entryOnly) {
             // Hours-entry only — nothing to submit. We're done for this month.
-            return sendTerminalSubmitDone(`${labelOf(sub)} の勤務時間はすべて入力済みです。`);
+            const message = `${labelOf(sub)} の勤務時間はすべて入力済みです（${workdays.length}勤務日）。`;
+            emitTermHistoryEvent(sub.targetMonth, 'hours-complete', 'hours-complete', message);
+            return sendTerminalSubmitDone(message);
           }
           // Hours done. Verify the previous period is approved before submitting (unless already checked).
           const next = await updateSubmit(sub, { phase: sub.prechecked ? 'submit-click' : 'submit-precheck' });
           return runSubmitStateMachine(next);
         }
         sendProgress(`${labelOf(sub)}：未入力の勤務時間（${res.missing.length}日分）を入力します...`, submitPercent(sub, 15));
-        await chrome.storage.session.set({ hrAutoState: { phase: 'clockin', dates: res.missing, dateIndex: 0, config: sub.config } });
+        const tasks = res.tasks || [];
+        await chrome.storage.session.set({
+          hrAutoState: {
+            phase: tasks[0].phase,
+            dates: tasks.map(task => task.date),
+            taskPhases: tasks.map(task => task.phase),
+            dateIndex: 0,
+            config: sub.config
+          }
+        });
         await updateSubmit(sub, { phase: 'submit-entering' });
         navigateToApplicationMenu(); // hand off to the existing clockin/clockout machine
         return;

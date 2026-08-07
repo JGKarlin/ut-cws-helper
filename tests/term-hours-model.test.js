@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-let isFullDayPaidLeave, findMissingWorkdays, findScheduledWorkdays;
+let isFullDayPaidLeave, findMissingWorkdays, findScheduledWorkdays, planMissingEntries, advancePlannedEntryState;
 try {
-  ({ isFullDayPaidLeave, findMissingWorkdays, findScheduledWorkdays } = require('../term-hours-model.js'));
+  ({ isFullDayPaidLeave, findMissingWorkdays, findScheduledWorkdays, planMissingEntries, advancePlannedEntryState } = require('../term-hours-model.js'));
 } catch (_) {}
 
 test('excludes full-day paid leave from missing work time', () => {
@@ -74,6 +74,51 @@ test('keeps a partial and blank duplicate missing without leave', () => {
   const blank = { day: 10, hasArrival: false, hasDeparture: false, rowText: '7/10 金' };
   assert.deepEqual(findMissingWorkdays(['2026-07-10'], [partial, blank]), ['2026-07-10']);
   assert.deepEqual(findMissingWorkdays(['2026-07-10'], [blank, partial]), ['2026-07-10']);
+});
+
+test('resumes only the missing break after an interrupted workday', () => {
+  assert.equal(typeof planMissingEntries, 'function');
+  assert.deepEqual(
+    planMissingEntries(['2026-08-10'], [{
+      day: 10,
+      hasArrival: true,
+      hasDeparture: true,
+      hasBreak: false,
+      rowText: '8/10 月 09時11分 18時04分'
+    }]),
+    [{ date: '2026-08-10', phase: 'break' }]
+  );
+});
+
+test('plans every missing field for the remaining full month in date order', () => {
+  assert.deepEqual(
+    planMissingEntries(['2026-08-10', '2026-08-12'], [
+      { day: 10, hasArrival: true, hasDeparture: true, hasBreak: false, rowText: '8/10 月 09時11分 18時04分' },
+      { day: 12, hasArrival: false, hasDeparture: false, hasBreak: false, rowText: '8/12 水' }
+    ]),
+    [
+      { date: '2026-08-10', phase: 'break' },
+      { date: '2026-08-12', phase: 'clockin' },
+      { date: '2026-08-12', phase: 'clockout' },
+      { date: '2026-08-12', phase: 'break' }
+    ]
+  );
+});
+
+test('advances a resumable per-field plan without replaying completed fields', () => {
+  assert.equal(typeof advancePlannedEntryState, 'function');
+  const start = {
+    phase: 'break',
+    dates: ['2026-08-10', '2026-08-12', '2026-08-12', '2026-08-12'],
+    taskPhases: ['break', 'clockin', 'clockout', 'break'],
+    dateIndex: 0,
+    config: { arriveRange: {}, departRange: {} }
+  };
+  const next = advancePlannedEntryState(start);
+  assert.equal(next.dateIndex, 1);
+  assert.equal(next.phase, 'clockin');
+  assert.equal(next.dates[next.dateIndex], '2026-08-12');
+  assert.equal(advancePlannedEntryState({ ...start, dateIndex: 3, phase: 'break' }), null);
 });
 
 test('derives scheduled dates from live 勤務表 day classes', () => {
