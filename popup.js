@@ -855,8 +855,9 @@ function renderTermSection(cache, renderState, history, failMsg) {
   const current = (cache && cache.currentMonth) || thisCalendarMonthKey();
   const months = (cache && cache.months) || {};
   const model = globalThis.HRStatusModel;
-  const rows = model ? model.buildMonthRows(Object.assign({ currentMonth: current, months }, renderState || {})) : [];
   const staleFallback = !!failMsg || !isTermCacheFresh(cache);
+  const modelMonths = staleFallback && model && model.markMonthsStale ? model.markMonthsStale(months) : months;
+  const rows = model ? model.buildMonthRows(Object.assign({ currentMonth: current, months: modelMonths }, renderState || {})) : [];
   rows.forEach(row => appendTermStatusRow(currentStatus, row, staleFallback));
   renderTermHistory(history, current);
 

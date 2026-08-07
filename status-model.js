@@ -43,7 +43,7 @@
     if (value.submitted === true && (approval === 'pending' || approval === 'none' || !approval)) {
       return 'submitted-pending';
     }
-    if (approval === 'pending') return 'waiting-approval';
+    if (approval === 'pending') return 'submitted-pending';
     if (value.submittable === true) return autoSubmitEnabled === false ? 'ready' : 'ready-auto';
     return 'not-eligible';
   }
@@ -58,6 +58,35 @@
     if (value.fresh === true || value.source === 'live') return true;
     const approval = String(value.approval || '').toLowerCase();
     return value.submitted === true || (approval !== '' && approval !== 'none');
+  }
+
+  function isSubmittedOrFinalState(state) {
+    return state === 'submitted-pending' || state === 'approved' || state === 'returned';
+  }
+
+  function markMonthsStale(months) {
+    if (Array.isArray(months)) {
+      return months.filter(entry => entry && entry.month).map(entry => Object.assign({}, entry, {
+        stale: true,
+        staleFallback: true,
+        fresh: false,
+        source: 'stale'
+      }));
+    }
+    if (!months || typeof months !== 'object') return {};
+    return Object.keys(months).reduce((result, month) => {
+      const entry = months[month];
+      if (entry) {
+        result[month] = Object.assign({}, entry, {
+          month: entry.month || month,
+          stale: true,
+          staleFallback: true,
+          fresh: false,
+          source: 'stale'
+        });
+      }
+      return result;
+    }, {});
   }
 
   function formatMonthLabel(month) {
@@ -95,6 +124,18 @@
     return references;
   }
 
+  function isBlockedByPreviousApproval(pending, entries, month, state) {
+    const explicitPending = pending.targetMonth === month && pending.prevMonth && pending.prevMonth !== month;
+    const readyForAutomaticSubmission = state === 'ready-auto' || state === 'ready';
+    if (!explicitPending && !readyForAutomaticSubmission) return false;
+    const previousMonth = explicitPending ? pending.prevMonth : monthMinus(month, 1);
+    const previous = entries.get(previousMonth);
+    if (!previous) return explicitPending;
+    if (!explicitPending && !hasAuthoritativeLiveStatus(previous)) return false;
+    const approval = String(previous && previous.approval || '').toLowerCase();
+    return approval !== 'approved' && approval !== 'final' && approval !== 'complete';
+  }
+
   function buildMonthRows(input) {
     const options = input || {};
     const autoSubmitEnabled = options.autoSubmitEnabled !== false;
@@ -126,12 +167,8 @@
         state = 'user-action-required';
       } else if (persistedMayOverride && activeRun.month === month && activeRun.state !== 'completed' && activeRun.state !== 'failed') {
         state = 'processing';
-      } else if (persistedMayOverride && pending.targetMonth === month && pending.prevMonth && pending.prevMonth !== month) {
-        const previous = entries.get(pending.prevMonth);
-        const previousApproval = String(previous && previous.approval || '').toLowerCase();
-        if (!previous || previousApproval === 'pending' || previousApproval === 'none' || !previousApproval) {
-          state = 'waiting-approval';
-        }
+      } else if (isBlockedByPreviousApproval(pending, entries, month, state) && !isSubmittedOrFinalState(state)) {
+        state = 'waiting-approval';
       }
 
       const row = Object.assign({}, entry, {
@@ -216,5 +253,5 @@
     });
   }
 
-  return { buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent };
+  return { buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale };
 });
