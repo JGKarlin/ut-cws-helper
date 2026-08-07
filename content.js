@@ -40,9 +40,9 @@ function sendProgress(text, percent) {
   safeSessionSet({ hrAutoProgress: { running: true, text, percent } });
 }
 
-function sendDone(text) {
+function sendDone(text, details) {
   sendToPopup({ type: 'DONE', text });
-  safeSessionSet({ hrAutoProgress: { running: false, done: true, text } });
+  safeSessionSet({ hrAutoProgress: Object.assign({ running: false, done: true, text }, details || {}) });
 }
 
 function sendError(message) {
@@ -54,6 +54,10 @@ function sendError(message) {
 // when the side panel is closed — e.g. during the unattended daily retry).
 function notify(title, message) {
   try { chrome.runtime.sendMessage({ type: 'NOTIFY', title, message }); } catch (_) {}
+}
+
+function emitTermHistoryEvent(month, type, state, message) {
+  sendToPopup({ type: 'TERM_HISTORY_EVENT', month, type, state, message, at: Date.now() });
 }
 
 // ── DOM Utilities ─────────────────────────────────────────────────────────────
@@ -1136,7 +1140,7 @@ function clearSubmit() {
 function abortSubmit(sub, message) {
   clearSubmit();
   if (sub && sub.auto) {
-    safeSessionRemove('hrAutoProgress');
+    safeSessionSet({ hrAutoProgress: { running: false, done: true, noOp: true, text: message } });
     return;
   }
   sendError(message);
@@ -1180,46 +1184,45 @@ function detectTermSubmissionSuccess(month) {
 }
 async function markTermSubmitted(month) {
   try {
-    const r = await chrome.storage.local.get('hrTermStatusCache');
+    const r = await chrome.storage.local.get(['hrTermStatusCache', 'hrPendingSubmit', 'hrUserActionRequired']);
     const cache = r.hrTermStatusCache || { months: {} };
     if (!cache.months) cache.months = {};
-    cache.months[month] = { ...(cache.months[month] || {}), submittable: false, submitted: true, approval: 'pending' };
-    await chrome.storage.local.set({ hrTermStatusCache: cache });
+    cache.months[month] = {
+      ...(cache.months[month] || {}), month, submittable: false, submitted: true, approval: 'pending',
+      fresh: true, stale: false, staleFallback: false, source: 'live'
+    };
+    const updates = { hrTermStatusCache: cache };
+    if (r.hrPendingSubmit && r.hrPendingSubmit.targetMonth === month) updates.hrPendingSubmit = null;
+    if (r.hrUserActionRequired && r.hrUserActionRequired.month === month) updates.hrUserActionRequired = null;
+    await chrome.storage.local.set(updates);
   } catch (_) {}
-  // A pending background retry for this month is now satisfied — clear it.
-  try {
-    const { hrPendingSubmit } = await chrome.storage.local.get('hrPendingSubmit');
-    if (hrPendingSubmit && hrPendingSubmit.targetMonth === month) {
-      await chrome.storage.local.remove('hrPendingSubmit');
-      chrome.runtime.sendMessage({ type: 'TERM_CLEAR_RETRY' });
-    }
-  } catch (_) {}
+  emitTermHistoryEvent(month, 'submitted', 'submitted-pending', `${formatMonthLabel(month)}分を提出しました。`);
+  // A pending background retry for this month is now satisfied (and was cleared
+  // atomically with the confirmed cache observation above).
+  try { chrome.runtime.sendMessage({ type: 'TERM_CLEAR_RETRY' }); } catch (_) {}
   // The month is no longer "ready" — refresh the toolbar badge / notification state.
   try { chrome.runtime.sendMessage({ type: 'TERM_READY_RECOMPUTE' }); } catch (_) {}
 }
 // Previous period not finally approved → can't submit yet. Persist a pending record
 // (storage.local), ask the background to schedule the daily retry + notify, and stop.
 async function handleTermBlocked(sub, prevMonth, prevApproval) {
-  // Notify only the first time this month is blocked — not on every daily retry.
-  let alreadyNotified = false;
-  try {
-    const existing = (await chrome.storage.local.get('hrPendingSubmit')).hrPendingSubmit;
-    if (existing && existing.targetMonth === sub.targetMonth && existing.notified) alreadyNotified = true;
-  } catch (_) {}
-
   const pending = {
     queue: sub.queue, queueIndex: sub.queueIndex || 0, targetMonth: sub.targetMonth,
     prevMonth, prevApproval, config: sub.config, workdaysByMonth: sub.workdaysByMonth || {},
-    since: Date.now(), notified: true,
+    since: Date.now(), notified: false,
   };
-  try { await chrome.storage.local.set({ hrPendingSubmit: pending }); } catch (_) {}
+  try {
+    const { hrUserActionRequired } = await chrome.storage.local.get('hrUserActionRequired');
+    const updates = { hrPendingSubmit: pending };
+    if (hrUserActionRequired && hrUserActionRequired.month === sub.targetMonth) updates.hrUserActionRequired = null;
+    await chrome.storage.local.set(updates);
+  } catch (_) {}
   safeSessionRemove('hrSubmitState');
   safeSessionRemove('hrAutoState');
   try { chrome.runtime.sendMessage({ type: 'TERM_SCHEDULE_RETRY' }); } catch (_) {}
-  if (!alreadyNotified) {
-    notify('月次申請を保留しました', `${formatMonthLabel(sub.targetMonth)} は前月（${formatMonthLabel(prevMonth)}）の最終承認待ちのため申請できません。承認され次第、毎日自動で確認して申請します。`);
-  }
-  sendDone(`${formatMonthLabel(sub.targetMonth)} は前月（${formatMonthLabel(prevMonth)}）が最終承認されていないため、まだ申請できません。毎日自動で確認し、承認され次第申請します。`);
+  const message = `${formatMonthLabel(sub.targetMonth)} は前月（${formatMonthLabel(prevMonth)}）が最終承認されていないため、まだ申請できません。承認され次第、自動で確認して申請します。`;
+  emitTermHistoryEvent(sub.targetMonth, 'waiting-approval', 'waiting-approval', message);
+  sendDone(message, { waitingApproval: true });
 }
 
 async function advanceSubmitQueue(sub, submitted, dryRun) {

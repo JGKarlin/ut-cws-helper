@@ -1,5 +1,9 @@
 'use strict';
 
+// Share the pure status/history rules with the service worker. This is a classic
+// MV3 worker, so importScripts keeps the module dependency-free and restart-safe.
+try { importScripts('status-model.js'); } catch (_) {}
+
 // Allow content scripts to access chrome.storage.session.
 // Without this, only extension pages (popup, service worker) can use it,
 // so the content script's persist/resume flow for multi-month automation
@@ -18,6 +22,10 @@ try {
 const MAIN_CWS_URL = 'https://ut-ppsweb.adm.u-tokyo.ac.jp/cws/cws';
 const RETRY_ALARM = 'hrTermRetry';
 const RETRY_TIMEOUT_MS = 180000; // give a background retry up to 3 min, then close the tab
+const TERM_HISTORY_KEY = 'hrTermStatusHistory';
+const BACKGROUND_RUN_KEY = 'hrBackgroundRun';
+const USER_ACTION_KEY = 'hrUserActionRequired';
+const NOTIFIED_BLOCKERS_KEY = 'hrNotifiedBlockers';
 
 function formatMonthLabel(monthKey) {
   if (!monthKey) return '';
@@ -270,13 +278,139 @@ function notifyLoginNeeded() {
 }
 
 let retryInProgress = false;
+let termLedgerWrite = Promise.resolve();
+
+function mutateTermLedger(work) {
+  termLedgerWrite = termLedgerWrite.catch(() => {}).then(work);
+  return termLedgerWrite;
+}
+
+function appendTermHistory(history, event) {
+  const model = globalThis.HRStatusModel;
+  if (!model || !model.appendHistoryEvent) return Array.isArray(history) ? history : [];
+  return model.appendHistoryEvent(history, event, thisCalMonthKey());
+}
+
+function historyEvent(month, type, state, message, at = Date.now()) {
+  return { month, type, state, message, at };
+}
+
+function backgroundOutcome(month, progress) {
+  const model = globalThis.HRStatusModel;
+  if (model && model.classifyBackgroundOutcome) return model.classifyBackgroundOutcome(month, progress);
+  return { completed: false, userAction: null };
+}
+
+function blockerSignature(month, progress) {
+  const value = progress || {};
+  const blocker = value.signature || value.message || (value.timeout ? 'timeout' : 'error');
+  return `${month}:${blocker}`;
+}
+
+async function recordBackgroundRunStart(month, startedAt) {
+  return mutateTermLedger(async () => {
+    const stored = await chrome.storage.local.get(TERM_HISTORY_KEY);
+    const history = appendTermHistory(
+      stored[TERM_HISTORY_KEY],
+      historyEvent(month, 'processing-started', 'processing', '自動処理を開始しました。', startedAt)
+    );
+    await chrome.storage.local.set({
+      [BACKGROUND_RUN_KEY]: { month, state: 'processing', startedAt },
+      [TERM_HISTORY_KEY]: history
+    });
+  });
+}
+
+async function recordBackgroundOutcome(month, progress) {
+  const outcome = backgroundOutcome(month, progress);
+  if (!outcome.completed && !outcome.userAction) return;
+
+  return mutateTermLedger(async () => {
+    const stored = await chrome.storage.local.get([
+      TERM_HISTORY_KEY,
+      USER_ACTION_KEY,
+      NOTIFIED_BLOCKERS_KEY
+    ]);
+    let history = stored[TERM_HISTORY_KEY];
+    const patch = {};
+    let notification = null;
+
+    if (outcome.completed) {
+      const waiting = !!(progress && progress.waitingApproval);
+      history = appendTermHistory(history, historyEvent(
+        month,
+        'processing-completed',
+        waiting ? 'waiting-approval' : 'processing-completed',
+        waiting ? '前月の最終承認待ちのため、自動確認を継続します。' : '自動処理が完了しました。'
+      ));
+      if (stored[USER_ACTION_KEY] && stored[USER_ACTION_KEY].month === month) patch[USER_ACTION_KEY] = null;
+    } else {
+      const signature = blockerSignature(month, progress);
+      const action = Object.assign({}, outcome.userAction, { since: Date.now(), signature });
+      history = appendTermHistory(history, historyEvent(month, 'action-required', 'user-action-required', action.message));
+      patch[USER_ACTION_KEY] = action;
+
+      const notified = stored[NOTIFIED_BLOCKERS_KEY] && typeof stored[NOTIFIED_BLOCKERS_KEY] === 'object'
+        ? stored[NOTIFIED_BLOCKERS_KEY] : {};
+      if (!notified[signature]) {
+        patch[NOTIFIED_BLOCKERS_KEY] = Object.assign({}, notified, { [signature]: { month, at: action.since } });
+        notification = action.message;
+      }
+    }
+
+    patch[TERM_HISTORY_KEY] = history;
+    await chrome.storage.local.set(patch);
+    if (notification) showNotification('月次申請に確認が必要です', notification);
+  });
+}
+
+async function recordBackgroundOutcomeEvent(event) {
+  if (!event || !event.month || !event.type || !event.state) return;
+  return mutateTermLedger(async () => {
+    const stored = await chrome.storage.local.get([TERM_HISTORY_KEY, USER_ACTION_KEY]);
+    const history = appendTermHistory(stored[TERM_HISTORY_KEY], {
+      month: event.month,
+      type: event.type,
+      state: event.state,
+      message: event.message || '',
+      at: event.at || Date.now()
+    });
+    const patch = { [TERM_HISTORY_KEY]: history };
+    if ((event.state === 'submitted-pending' || event.state === 'waiting-approval') &&
+        stored[USER_ACTION_KEY] && stored[USER_ACTION_KEY].month === event.month) {
+      patch[USER_ACTION_KEY] = null;
+    }
+    await chrome.storage.local.set(patch);
+  });
+}
+
+async function clearBackgroundRun(startedAt) {
+  const stored = await chrome.storage.local.get(BACKGROUND_RUN_KEY);
+  if (stored[BACKGROUND_RUN_KEY] && stored[BACKGROUND_RUN_KEY].startedAt === startedAt) {
+    await chrome.storage.local.remove(BACKGROUND_RUN_KEY);
+  }
+}
 
 // Set hrSubmitState, open a hidden CWS tab, let the content machine run, then clean up.
 async function driveSubmitInBackgroundTab(sub) {
   if (retryInProgress) return;
   retryInProgress = true;
   let tabId = null;
+  const startedAt = Date.now();
+  const month = sub && sub.targetMonth;
+  const tracksMonthlySubmission = !!(sub && !sub.entryOnly);
   try {
+    if (!month) return;
+    if (tracksMonthlySubmission) {
+      const prior = await chrome.storage.local.get(BACKGROUND_RUN_KEY);
+      const existingRun = prior[BACKGROUND_RUN_KEY];
+      if (existingRun && Date.now() - Number(existingRun.startedAt || 0) < RETRY_TIMEOUT_MS) return;
+      if (existingRun && existingRun.month) {
+        await recordBackgroundOutcome(existingRun.month, { timeout: true });
+      }
+      await recordBackgroundRunStart(month, startedAt);
+    }
+
     // Clear stale scan state so the workday-scan navigation always starts fresh. A prior
     // run that stalled/timed out mid-scan can leave hrScanNavStep set (e.g. 'main'), which
     // makes clickWorkdayCalendarLink think it already reached the work menu and wait forever
@@ -297,19 +431,21 @@ async function driveSubmitInBackgroundTab(sub) {
       return;
     }
 
-    await waitForRetryCompletion(RETRY_TIMEOUT_MS);
-
-    // The side panel is closed during a background run, so surface a hard failure as a
-    // desktop notification (success/blocked already notify from content.js).
-    const { hrAutoProgress } = await chrome.storage.session.get('hrAutoProgress');
-    if (hrAutoProgress && hrAutoProgress.error) {
-      showNotification('月次申請に失敗しました', hrAutoProgress.message || 'エラーが発生しました。');
+    const progress = await waitForRetryCompletion(RETRY_TIMEOUT_MS);
+    if (tracksMonthlySubmission) await recordBackgroundOutcome(month, progress || { timeout: true });
+  } catch (err) {
+    if (tracksMonthlySubmission) {
+      await recordBackgroundOutcome(month, {
+        error: true,
+        message: (err && err.message) || '自動申請中にエラーが発生しました。'
+      });
     }
-  } catch (_) {
-    // best-effort; try again on the next alarm
   } finally {
     if (tabId != null) { try { await chrome.tabs.remove(tabId); } catch (_) {} }
     try { await chrome.storage.session.remove('hrSubmitState'); } catch (_) {}
+    if (tracksMonthlySubmission) {
+      try { await clearBackgroundRun(startedAt); } catch (_) {}
+    }
     await stopActivitySpinner(); // stop the toolbar spinner + restore the ready-months badge
     retryInProgress = false;
   }
@@ -393,9 +529,9 @@ function waitForRetryCompletion(timeoutMs) {
     const tick = async () => {
       try {
         const { hrAutoProgress } = await chrome.storage.session.get('hrAutoProgress');
-        if (hrAutoProgress && (hrAutoProgress.done || hrAutoProgress.error)) return resolve();
+        if (hrAutoProgress && (hrAutoProgress.done || hrAutoProgress.error)) return resolve(hrAutoProgress);
       } catch (_) {}
-      if (Date.now() >= deadline) return resolve();
+      if (Date.now() >= deadline) return resolve({ timeout: true });
       setTimeout(tick, 2000);
     };
     setTimeout(tick, 3000);
@@ -403,13 +539,19 @@ function waitForRetryCompletion(timeoutMs) {
 }
 
 // ── Messages from content scripts / UI ────────────────────────────────────────
-chrome.runtime.onMessage.addListener((msg) => {
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg) return;
   if (msg.type === 'NOTIFY') { showNotification(msg.title, msg.message); return; }
   // A CWS page loaded → user is logged in; resume if we were waiting on login.
   if (msg.type === 'CWS_READY') { onCwsReady(); return; }
   // The content script's passive 勤務表 readiness report (panel may be closed).
   if (msg.type === 'TERM_OBSERVED') { handleTermObserved(msg); return; }
+  if (msg.type === 'TERM_HISTORY_EVENT') {
+    recordBackgroundOutcomeEvent(msg)
+      .then(() => sendResponse({ ok: true }))
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
   // Recompute the badge/notification from the current status cache.
   if (msg.type === 'TERM_STATUS_REFRESHED' || msg.type === 'TERM_READY_RECOMPUTE') { recomputeTermReady(); return; }
   // These reconcile the daily alarm; the pending/cleared ones also change readiness.

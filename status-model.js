@@ -253,5 +253,20 @@
     });
   }
 
-  return { buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale };
+  function classifyBackgroundOutcome(month, progress) {
+    const value = progress || {};
+    if (value.error || value.timeout) {
+      return {
+        completed: false,
+        userAction: {
+          month,
+          message: value.message || (value.timeout ? '自動申請が時間内に完了しませんでした。' : '自動申請を完了できませんでした。')
+        }
+      };
+    }
+    if (value.waitingApproval || value.done) return { completed: true, userAction: null };
+    return { completed: false, userAction: null };
+  }
+
+  return { buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome };
 });

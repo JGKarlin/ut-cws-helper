@@ -187,3 +187,15 @@ test('marks failed-scan rows stale before persisted action state is resolved', (
   assert.equal(july.fresh, false);
   assert.equal(july.state, 'user-action-required');
 });
+
+test('requires user action for an error but not an approval wait', () => {
+  assert.equal(typeof classifyBackgroundOutcome, 'function');
+  assert.deepEqual(
+    classifyBackgroundOutcome('2026-07', { error: true, message: '確認してください' }),
+    { completed: false, userAction: { month: '2026-07', message: '確認してください' } }
+  );
+  assert.deepEqual(
+    classifyBackgroundOutcome('2026-07', { done: true, waitingApproval: true }),
+    { completed: true, userAction: null }
+  );
+});
