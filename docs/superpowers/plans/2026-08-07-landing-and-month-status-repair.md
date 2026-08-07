@@ -15,6 +15,7 @@
 - Read-only discovery and verification must never submit a month.
 - Automatic submission remains automatic while it can proceed; only an unrecoverable blocker exposes the month-specific manual action.
 - Do not restore session-specific `@FN` URLs or brittle `nth-child` selectors.
+- A row marked `年休（日）／年次有給休暇／全日` must never enter the automatic work-time queue.
 
 ---
 
@@ -295,7 +296,75 @@ git add background.js content.js popup.js popup.html tests/status-model.test.js
 git commit -m "feat: surface background status and required actions"
 ```
 
-### Task 5: Live non-submitting Chrome verification
+### Task 5: Exclude full-day paid leave from automatic work-time entry
+
+**Files:**
+- Create: `term-hours-model.js`
+- Create: `tests/term-hours-model.test.js`
+- Modify: `manifest.json`
+- Modify: `content.js:934-986`
+
+**Interfaces:**
+- Produces: `HRTermHours.isFullDayPaidLeave(rowText)` and `HRTermHours.findMissingWorkdays(workdays, rowFacts)`.
+- Consumes row facts shaped as `{ day, hasArrival, hasDeparture, rowText }` extracted read-only from the live 勤務表.
+
+- [ ] **Step 1: Write failing safety tests**
+
+```js
+const test = require('node:test');
+const assert = require('node:assert/strict');
+let isFullDayPaidLeave, findMissingWorkdays;
+try { ({ isFullDayPaidLeave, findMissingWorkdays } = require('../term-hours-model.js')); } catch (_) {}
+
+test('excludes full-day paid leave from missing work time', () => {
+  assert.equal(typeof findMissingWorkdays, 'function');
+  const missing = findMissingWorkdays(
+    ['2026-07-10'],
+    [{ day: 10, hasArrival: false, hasDeparture: false, rowText: '7/10 金 年休（日） 年次有給休暇 全日' }]
+  );
+  assert.deepEqual(missing, []);
+});
+
+test('keeps a normal blank weekday missing', () => {
+  assert.deepEqual(
+    findMissingWorkdays(['2026-07-09'], [{ day: 9, hasArrival: false, hasDeparture: false, rowText: '7/9 木' }]),
+    ['2026-07-09']
+  );
+});
+
+test('does not classify partial-day leave as full-day paid leave', () => {
+  assert.equal(isFullDayPaidLeave('年休（時間） 2時間'), false);
+});
+```
+
+- [ ] **Step 2: Run and verify RED**
+
+Run: `node --test tests/term-hours-model.test.js`
+
+Expected: FAIL on the missing production function assertion.
+
+- [ ] **Step 3: Implement the pure safety model**
+
+Normalize whitespace and classify a row as full-day paid leave only when it contains `全日` and at least one of `年休（日）` or `年次有給休暇`. `findMissingWorkdays` returns a date only when its row is absent or lacks either time and is not classified as full-day paid leave.
+
+- [ ] **Step 4: Integrate the gate before queue construction**
+
+Load `term-hours-model.js` before `content.js`. Refactor `detectHoursComplete()` to extract `rowText`, arrival/departure presence, and day number, then call `findMissingWorkdays`. Do not clear or modify any existing live values.
+
+- [ ] **Step 5: Run focused and complete tests**
+
+Run: `node --test tests/term-hours-model.test.js && node --test tests/*.test.js && node --check term-hours-model.js && node --check content.js`
+
+Expected: all tests PASS and both syntax checks exit 0.
+
+- [ ] **Step 6: Commit the safety gate**
+
+```bash
+git add term-hours-model.js tests/term-hours-model.test.js manifest.json content.js
+git commit -m "fix: skip full-day leave in automatic time entry"
+```
+
+### Task 6: Live non-submitting Chrome verification
 
 **Files:**
 - Modify only if verification exposes a demonstrated defect in the planned behavior.
@@ -322,10 +391,10 @@ Open the side panel and confirm it reports:
 
 - [ ] **Step 4: Verify history and safety**
 
-Confirm that repeated unchanged refreshes do not duplicate entries, that history is newest first, and that no `月次申請` or `確定` action was performed during verification.
+Confirm that repeated unchanged refreshes do not duplicate entries, that history is newest first, and that no `月次申請` or `確定` action was performed during verification. Confirm from a read-only July 10 inspection that the full-day leave marker excludes the date from the computed missing-work queue; do not clear or edit its current live values.
 
 - [ ] **Step 5: Run final repository checks**
 
-Run: `git diff --check && node --test tests/*.test.js && node --check navigation-model.js && node --check status-model.js && node --check content.js && node --check popup.js && node --check background.js && git status --short`
+Run: `git diff --check && node --test tests/*.test.js && node --check navigation-model.js && node --check status-model.js && node --check term-hours-model.js && node --check content.js && node --check popup.js && node --check background.js && git status --short`
 
 Expected: no diff errors; all tests and syntax checks PASS; status shows only intentional files or is clean after commits.

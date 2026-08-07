@@ -13,6 +13,7 @@ The unattended workday scan can loop on the CWS `メインメニュー` page bec
 5. If progress is blocked and the user genuinely must act, the card shows a prominent explanation and a month-specific submission action. A single desktop notification is also sent so the blocker is visible while the panel is closed.
 6. Read-only discovery and rendering must never submit a month. Existing confirmation and submission safeguards remain authoritative.
 7. The panel must provide a persistent, readable account of what the extension and CWS have done: what was submitted, what is awaiting approval, what was approved, what is processing, what failed, and what needs user action.
+8. A 勤務表 row marked as full-day paid leave, including `年休（日）／年次有給休暇／全日`, is not missing work time. Automatic entry must leave its 出勤, 退勤, and 勤務外時間数 fields blank and exclude that date from the entry queue.
 
 ## Design
 
@@ -59,6 +60,10 @@ Routine scans that observe no state change do not create entries. An event with 
 
 Only a state that automation cannot resolve produces `user action required`. The card names the affected month, explains the blocker, and presents the existing guarded submission flow as its action. The desktop notification is deduplicated per month and blocker state.
 
+### Full-day leave safety gate
+
+Before constructing an automatic-entry queue, classify each 勤務表 row from its rendered row content. A row containing a full-day paid-leave marker (`年休（日）` or `年次有給休暇`, together with `全日`) is complete by policy even when its work-time fields are blank. This gate applies to both unattended current-month entry and the pre-submission missing-hours check. It never clears or edits an already-populated live row; correcting historical values remains an explicit user action.
+
 ## Testing
 
 - A landing-page fixture containing only the `就労管理` first-hop must select that link and must not choose the fallback reload.
@@ -66,6 +71,8 @@ Only a state that automation cannot resolve produces `user action required`. The
 - July waiting, processing, automatic, and user-action-required states must render distinct copy and only the last state may show the manual action.
 - State transitions must append timestamped history entries, retain only 12 months, and deduplicate unchanged periodic observations.
 - A newer live CWS observation must replace stale current status while preserving the earlier event in history.
+- A July 10 fixture containing `年休（日） 年次有給休暇 全日` and blank time fields must produce no missing-date entry.
+- A normal weekday with blank time fields must remain missing, and a partial-day leave row must not be treated as full-day leave.
 - Read-only rendering tests must prove that no submission message or click occurs.
 - JavaScript syntax checks and a live, non-submitting Chrome walkthrough verify the repaired route and displayed statuses.
 
