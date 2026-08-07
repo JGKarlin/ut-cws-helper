@@ -554,9 +554,13 @@ async function runDailyCheck() {
   // The UTokyo CWS session rejects simultaneous navigation from two tabs. If the
   // side panel is scanning submission status, let it finish and retry from PANEL_OPENED.
   try {
-    const session = await chrome.storage.session.get('hrScanActive');
+    const session = await chrome.storage.session.get(['hrScanActive', 'hrScanStartedAt']);
     const model = globalThis.HRStatusModel;
-    if (model && model.cwsScanActive && model.cwsScanActive(session)) return;
+    const lock = model && model.planCwsScanLock
+      ? model.planCwsScanLock(session, Date.now(), 120000)
+      : { defer: !!session.hrScanActive, stale: false };
+    if (lock.defer) return;
+    if (lock.stale) await chrome.storage.session.remove(['hrScanActive', 'hrScanStartedAt']);
   } catch (_) {}
   // Current-month hours entry runs first and independently of the submission gate.
   if (s.hrAutoEntryEnabled) await runCurrentMonthEntryCheck();

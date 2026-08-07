@@ -301,6 +301,14 @@
     return ['hrAutoProgress', 'hrScanNavStep', 'hrTermScan', 'hrScanActive', 'hrScanStartedAt'];
   }
 
+  function planCwsScanLock(sessionState, now, maxAgeMs) {
+    const state = sessionState || {};
+    if (!state.hrScanActive) return { defer: false, stale: false };
+    const startedAt = Number(state.hrScanStartedAt || 0);
+    const fresh = startedAt > 0 && Number(now) - startedAt >= 0 && Number(now) - startedAt < Number(maxAgeMs);
+    return { defer: fresh, stale: !fresh };
+  }
+
   return {
     buildMonthRows,
     statusEventsFromSnapshot,
@@ -312,6 +320,7 @@
     cwsAutomationActive,
     cwsScanActive,
     shouldRunStatusScan,
-    cwsAutomationStartupCleanupKeys
+    cwsAutomationStartupCleanupKeys,
+    planCwsScanLock
   };
 });

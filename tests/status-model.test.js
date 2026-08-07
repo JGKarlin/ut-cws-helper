@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys;
+let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock;
 try {
-  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys } = require('../status-model.js'));
+  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock } = require('../status-model.js'));
 } catch (_) {}
 
 test('serializes CWS status scans and automation runs', () => {
@@ -18,6 +18,9 @@ test('serializes CWS status scans and automation runs', () => {
   assert.deepEqual(cwsAutomationStartupCleanupKeys(), [
     'hrAutoProgress', 'hrScanNavStep', 'hrTermScan', 'hrScanActive', 'hrScanStartedAt'
   ]);
+  assert.deepEqual(planCwsScanLock({ hrScanActive: true, hrScanStartedAt: 950 }, 1000, 100), { defer: true, stale: false });
+  assert.deepEqual(planCwsScanLock({ hrScanActive: true, hrScanStartedAt: 800 }, 1000, 100), { defer: false, stale: true });
+  assert.deepEqual(planCwsScanLock({ hrScanActive: true }, 1000, 100), { defer: false, stale: true });
 });
 
 test('keeps June visible as submitted and awaiting approval', () => {

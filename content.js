@@ -452,7 +452,7 @@ async function runStateMachine() {
     // popup left the flag stuck (no/old timestamp), so automation never wedges.
     let since = null;
     try { since = (await chrome.storage.session.get('hrScanStartedAt')).hrScanStartedAt; } catch {}
-    if (!since || Date.now() - since < 120000) return;
+    if (since && Date.now() - since < 120000) return;
     try { await chrome.storage.session.remove(['hrScanActive', 'hrScanStartedAt']); } catch {}
   }
 
