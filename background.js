@@ -451,7 +451,11 @@ async function driveSubmitInBackgroundTab(sub) {
     // run that stalled/timed out mid-scan can leave hrScanNavStep set (e.g. 'main'), which
     // makes clickWorkdayCalendarLink think it already reached the work menu and wait forever
     // for a 本人用実績 link that isn't on the current (勤務表) page — the 2% stall.
-    await chrome.storage.session.remove(['hrAutoProgress', 'hrScanNavStep', 'hrTermScan']);
+    const statusModel = globalThis.HRStatusModel;
+    const startupCleanupKeys = statusModel && statusModel.cwsAutomationStartupCleanupKeys
+      ? statusModel.cwsAutomationStartupCleanupKeys()
+      : ['hrAutoProgress', 'hrScanNavStep', 'hrTermScan', 'hrScanActive', 'hrScanStartedAt'];
+    await chrome.storage.session.remove(startupCleanupKeys);
     await chrome.storage.session.set({ hrSubmitState: sub });
     ownsSessionState = true;
     startActivitySpinner(); // toolbar indicator: a hidden run is now working

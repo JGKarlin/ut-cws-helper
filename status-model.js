@@ -297,6 +297,10 @@
     return !value.autoEntryEnabled && !value.automationActive;
   }
 
+  function cwsAutomationStartupCleanupKeys() {
+    return ['hrAutoProgress', 'hrScanNavStep', 'hrTermScan', 'hrScanActive', 'hrScanStartedAt'];
+  }
+
   return {
     buildMonthRows,
     statusEventsFromSnapshot,
@@ -307,6 +311,7 @@
     shouldClearBackgroundAction,
     cwsAutomationActive,
     cwsScanActive,
-    shouldRunStatusScan
+    shouldRunStatusScan,
+    cwsAutomationStartupCleanupKeys
   };
 });

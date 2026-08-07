@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan;
+let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys;
 try {
-  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan } = require('../status-model.js'));
+  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys } = require('../status-model.js'));
 } catch (_) {}
 
 test('serializes CWS status scans and automation runs', () => {
@@ -15,6 +15,9 @@ test('serializes CWS status scans and automation runs', () => {
   assert.equal(shouldRunStatusScan({ autoEntryEnabled: true, automationActive: false }), false);
   assert.equal(shouldRunStatusScan({ autoEntryEnabled: false, automationActive: true }), false);
   assert.equal(shouldRunStatusScan({ autoEntryEnabled: false, automationActive: false }), true);
+  assert.deepEqual(cwsAutomationStartupCleanupKeys(), [
+    'hrAutoProgress', 'hrScanNavStep', 'hrTermScan', 'hrScanActive', 'hrScanStartedAt'
+  ]);
 });
 
 test('keeps June visible as submitted and awaiting approval', () => {
