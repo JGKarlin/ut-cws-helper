@@ -16,7 +16,7 @@ function setDefaultDates() {
 }
 
 const CWS_MAIN_URL = 'https://ut-ppsweb.adm.u-tokyo.ac.jp/cws/cws';
-const CACHE_KEY = 'hrWorkdaysCache';
+const CACHE_KEY = 'hrWorkdaysCacheV2';
 
 // ── UTokyo network connection indicator ──────────────────────────────────────
 // The 就労管理システム is only reachable from within the UTokyo network (campus
@@ -80,7 +80,7 @@ async function waitForTabComplete(tabId, timeout = 60000) {
   await new Promise((resolve, reject) => {
     const timeoutId = setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener);
-      reject(new Error('平日の取得がタイムアウトしました'));
+      reject(new Error('勤務日の取得がタイムアウトしました'));
     }, timeout);
 
     const listener = (id, info) => {
@@ -128,14 +128,14 @@ async function prepareWorkdayScanTab(tabId, updateProgressFn) {
     if (prep && prep.ready) return;
     if (prep && prep.error) throw new Error(prep.error);
 
-    const step = prep && prep.step ? prep.step : '本人用実績入力へ移動中...';
+    const step = prep && prep.step ? prep.step : '勤務表へ移動中...';
     const percent = Math.min(35, 5 + attempt * 2);
     updateProgressFn(step, percent);
 
     const topLevelNavigation =
       step.includes('就労管理ページへ移動中') ||
-      step.includes('本人用実績メニューへ移動中') ||
-      step.includes('本人用実績入力へ移動中');
+      step.includes('就労管理へ移動中') ||
+      step.includes('勤務表へ移動中');
 
     if (topLevelNavigation) {
       try {
@@ -148,20 +148,23 @@ async function prepareWorkdayScanTab(tabId, updateProgressFn) {
     await delay(prep && prep.waitMs ? prep.waitMs : 1200);
   }
 
-  throw new Error('本人用実績入力ページへ移動できませんでした');
+  throw new Error('勤務表へ移動できませんでした');
 }
 
 async function fetchWorkdaysForMonth(tabId, monthKey, index, total, updateProgressFn) {
   const label = `${monthKey.slice(0, 4)}年${parseInt(monthKey.slice(5), 10)}月`;
+  const deadline = Date.now() + 60000;
+  let attempt = 0;
 
-  for (let attempt = 0; attempt < 3; attempt++) {
+  while (Date.now() < deadline) {
     if (attempt > 0) {
       await waitForTabComplete(tabId).catch(() => {});
       await delay(800);
     }
+    attempt += 1;
 
     const percent = total <= 1 ? 50 : Math.round(40 + (50 * index / total));
-    updateProgressFn(`${label}の本人用実績入力で対象期間を表示し、勤務表の平日を確認中 (${index}/${total})`, percent);
+    updateProgressFn(`${label}の勤務表で対象勤務日を確認中 (${index}/${total})`, percent);
 
     try {
       const res = await sendMessageWithRetry(
@@ -173,10 +176,15 @@ async function fetchWorkdaysForMonth(tabId, monthKey, index, total, updateProgre
       if (res && res.error) {
         throw new Error(res.error);
       }
-
-      return Array.isArray(res && res.dates) ? res.dates : [];
+      if (Array.isArray(res && res.dates)) return res.dates;
+      if (res && res.navigating) {
+        updateProgressFn(res.step || `${label}の勤務表へ移動中...`, percent);
+        await delay(res.waitMs || 1200);
+        continue;
+      }
+      throw new Error(`${label} の勤務日を読み取れませんでした`);
     } catch (err) {
-      if (!isTransientMessageChannelError(err) || attempt === 2) {
+      if (!isTransientMessageChannelError(err)) {
         throw err;
       }
       await delay(1200);
@@ -206,7 +214,7 @@ async function getWorkdays(startDate, endDate, updateProgressFn) {
   const missing = months.filter(m => !cache[m] || !Array.isArray(cache[m]));
 
   if (missing.length > 0) {
-    updateProgressFn('本人用実績入力で対象期間を表示し、勤務表の平日を確認中...', 5);
+    updateProgressFn('勤務表で対象勤務日を確認中...', 5);
     await chrome.storage.session.set({ hrScanActive: true, hrScanStartedAt: Date.now() });
     let tabId = null;
     try {

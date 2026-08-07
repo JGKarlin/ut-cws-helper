@@ -964,6 +964,13 @@ function currentMonthKey() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
+function currentDateKey() {
+  const nav = getTermNavText();
+  const m = nav.match(/本日は(\d{4})年(\d{1,2})月(\d{1,2})日/);
+  if (m) return `${m[1]}-${String(parseInt(m[2], 10)).padStart(2, '0')}-${String(parseInt(m[3], 10)).padStart(2, '0')}`;
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 // A month is submittable iff the 月次申請 button is present and enabled (confirmed:
 // closed/past months have no button; the actionable month does).
 function isMonthSubmittable() {
@@ -990,6 +997,55 @@ function detectTermTable() {
     }
   }
   return null;
+}
+// The live 勤務表 already classifies every date cell. mg_normal is a scheduled
+// workday; Saturday, Sunday, and public holidays use distinct mg_dh_* classes.
+// Reuse that authoritative table instead of the unavailable 本人用実績 calendar.
+function detectScheduledWorkdays(monthKey, cutoffDate) {
+  const info = detectTermTable();
+  if (!info) return { dates: [], error: '勤務表の勤務時間表が見つかりません' };
+  const hoursModel = globalThis.HRTermHours;
+  if (!hoursModel || typeof hoursModel.findScheduledWorkdays !== 'function') {
+    return { dates: [], error: '勤務日の安全判定モデルを読み込めませんでした' };
+  }
+  const rowFacts = [];
+  for (const row of info.table.rows) {
+    const cells = row.cells;
+    if (!cells.length) continue;
+    const d0 = normalizeDigits(cells[0].textContent || '').trim();
+    if (d0.indexOf('月日') !== -1 || d0.indexOf('曜日') !== -1) continue;
+    const md = d0.match(/(\d{1,2})\s*\/\s*(\d{1,2})/);
+    const d2 = !md && d0.match(/(\d{1,2})日/);
+    const day = md ? parseInt(md[2], 10) : (d2 ? parseInt(d2[1], 10) : null);
+    if (day == null || day < 1 || day > 31) continue;
+    rowFacts.push({ day, dayClass: cells[0].className || '' });
+  }
+  return { dates: hoursModel.findScheduledWorkdays(monthKey, rowFacts, cutoffDate) };
+}
+
+function scheduledWorkdaysMessage(monthKey, dates) {
+  const compactDates = dates.map(date => {
+    const parts = date.split('-');
+    return `${parseInt(parts[1], 10)}/${parseInt(parts[2], 10)}`;
+  }).join('、');
+  const suffix = compactDates ? `（${compactDates}）` : '';
+  return `${formatMonthLabel(monthKey)}：対象勤務日を${dates.length}日確認しました${suffix}。`;
+}
+
+async function scanTermWorkdaysStep(monthKey, cutoffDate) {
+  if (!isTermPage()) return prepareTermPage();
+  const current = readDisplayedTermMonth();
+  if (!current) return { error: '勤務表の対象月を読み取れませんでした' };
+  if (current !== monthKey) {
+    const goBack = monthDelta(monthKey, current) < 0;
+    const btn = goBack ? getTermEl('TOPRVTM') : getTermEl('TONXTTM');
+    if (!btn) return { error: `${formatMonthLabel(monthKey)}へ移動できませんでした` };
+    activateElement(btn);
+    return { navigating: true, step: `${formatMonthLabel(monthKey)}の勤務表へ移動中...`, waitMs: 1500 };
+  }
+  const result = detectScheduledWorkdays(monthKey, cutoffDate);
+  if (result.error) return { error: result.error };
+  return { monthKey, dates: result.dates };
 }
 // Given the month's 平日 (yyyy-mm-dd, from the existing workday scan), report which
 // of them still lack times in the 勤務表 (time format is HH時MM分). Header rows are
@@ -1330,8 +1386,10 @@ async function runSubmitStateMachine(sub) {
           // Already submitted or window closed — a quiet no-op for the unattended auto run.
           return abortSubmit(sub, `${labelOf(sub)} は月次申請の対象外です（提出期限切れ、または既に申請済みです）。`);
         }
-        const workdays = (sub.workdaysByMonth && sub.workdaysByMonth[sub.targetMonth]) || [];
-        if (!workdays.length) {
+        const hasWorkdays = !!(sub.workdaysByMonth &&
+          Object.prototype.hasOwnProperty.call(sub.workdaysByMonth, sub.targetMonth));
+        const workdays = hasWorkdays ? sub.workdaysByMonth[sub.targetMonth] : [];
+        if (!hasWorkdays) {
           // Workdays unknown (e.g. an unattended auto run) — fetch the month's 平日 first.
           const next = await updateSubmit(sub, { phase: 'submit-scan-workdays' });
           return runSubmitStateMachine(next);
@@ -1362,38 +1420,24 @@ async function runSubmitStateMachine(sub) {
       }
 
       case 'submit-scan-workdays': {
-        // Reach 本人用実績入力 and read the target month's 平日 (holiday-aware), then resume.
-        // Used when the caller didn't pre-scan workdays (the unattended auto run).
+        // Read the target month's scheduled dates directly from the authoritative
+        // 勤務表. For current-month entry, never queue future dates.
         const target = sub.targetMonth;
-        if (sub.workdaysByMonth && (sub.workdaysByMonth[target] || []).length) {
+        if (sub.workdaysByMonth && Object.prototype.hasOwnProperty.call(sub.workdaysByMonth, target)) {
           return runSubmitStateMachine(await updateSubmit(sub, { phase: 'submit-ensure-month' }));
         }
-        if (!isWorkdayCalendarPage()) {
-          const r = await clickWorkdayCalendarLink(); // multi-step nav across reloads
-          if (!r || !r.ready) {
-            sendProgress(`${labelOf(sub)}：平日を確認中...（${(r && r.step) || ''}）`, submitPercent(sub, 2));
-            // A real navigation (clicked) reloads the page and re-enters us automatically.
-            // A passive wait (link not present yet) will NOT reload — re-poll ourselves so
-            // we don't stall forever (bounded; the background tab also times out at 3 min).
-            if (r && !r.clicked) {
-              const polls = (sub._scanPolls || 0) + 1;
-              if (polls > 25) {
-                return sendRetryableSubmitError(sub, `${labelOf(sub)} の本人用実績入力ページへ移動できませんでした。次回の自動チェックで再試行します。`);
-              }
-              setTimeout(() => { runSubmitStateMachine({ ...sub, _scanPolls: polls }); }, (r && r.waitMs) || 1000);
-            }
-            return; // clicked → re-enter on next page load
-          }
+        if (!isTermPage() || readDisplayedTermMonth() !== target) {
+          return runSubmitStateMachine(await updateSubmit(sub, { phase: 'submit-ensure-month' }));
         }
-        let dates;
-        try {
-          dates = await loadMonthForWorkdays(target); // in-page, no reload
-        } catch (e) {
-          return sendRetryableSubmitError(sub, `${labelOf(sub)} の平日を取得できませんでした：${e.message}`);
-        }
-        await clearWorkdayScanNavStep();
+        const cutoffDate = sub.entryOnly && target === currentMonthKey() ? currentDateKey() : null;
+        const result = detectScheduledWorkdays(target, cutoffDate);
+        if (result.error) return sendRetryableSubmitError(sub, result.error);
+        const dates = result.dates;
+        const message = scheduledWorkdaysMessage(target, dates);
+        sendProgress(message, submitPercent(sub, 10));
+        emitTermHistoryEvent(target, `workdays-determined-${cutoffDate || 'full-month'}`, 'workdays-determined', message);
         const wbm = { ...(sub.workdaysByMonth || {}), [target]: dates };
-        return runSubmitStateMachine(await updateSubmit(sub, { phase: 'submit-ensure-month', workdaysByMonth: wbm }));
+        return runSubmitStateMachine(await updateSubmit(sub, { phase: 'submit-check-hours', workdaysByMonth: wbm }));
       }
 
       case 'submit-precheck': {
@@ -1509,7 +1553,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === 'PREPARE_WORKDAY_SCAN') {
-    clickWorkdayCalendarLink()
+    prepareTermPage()
       .then(result => sendResponse(result))
       .catch(err => sendResponse({ error: err.message }));
     return true;
@@ -1527,12 +1571,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === 'SCAN_WORKDAYS_FOR_MONTH') {
-    if (!isWorkdayCalendarPage()) {
-      sendResponse({ error: '本人用実績入力のページではありません' });
-      return;
-    }
-    scanWorkdaysForMonth(msg.monthKey)
-      .then(dates => sendResponse({ monthKey: msg.monthKey, dates }))
+    scanTermWorkdaysStep(msg.monthKey, msg.cutoffDate)
+      .then(result => sendResponse(result))
       .catch(err => sendResponse({ error: err.message }));
     return true;
   }

@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-let isFullDayPaidLeave, findMissingWorkdays;
+let isFullDayPaidLeave, findMissingWorkdays, findScheduledWorkdays;
 try {
-  ({ isFullDayPaidLeave, findMissingWorkdays } = require('../term-hours-model.js'));
+  ({ isFullDayPaidLeave, findMissingWorkdays, findScheduledWorkdays } = require('../term-hours-model.js'));
 } catch (_) {}
 
 test('excludes full-day paid leave from missing work time', () => {
@@ -74,4 +74,53 @@ test('keeps a partial and blank duplicate missing without leave', () => {
   const blank = { day: 10, hasArrival: false, hasDeparture: false, rowText: '7/10 金' };
   assert.deepEqual(findMissingWorkdays(['2026-07-10'], [partial, blank]), ['2026-07-10']);
   assert.deepEqual(findMissingWorkdays(['2026-07-10'], [blank, partial]), ['2026-07-10']);
+});
+
+test('derives scheduled dates from live 勤務表 day classes', () => {
+  assert.equal(typeof findScheduledWorkdays, 'function');
+  assert.deepEqual(
+    findScheduledWorkdays('2026-07', [
+      { day: 3, dayClass: 'mg_normal' },
+      { day: 4, dayClass: 'mg_dh_sat' },
+      { day: 5, dayClass: 'mg_dh_sun' },
+      { day: 20, dayClass: 'mg_dh_holiday' },
+      { day: 21, dayClass: 'mg_normal' }
+    ]),
+    ['2026-07-03', '2026-07-21']
+  );
+});
+
+test('limits current-month scheduled dates through today', () => {
+  assert.deepEqual(
+    findScheduledWorkdays('2026-08', [
+      { day: 3, dayClass: 'mg_normal' },
+      { day: 7, dayClass: 'mg_normal' },
+      { day: 10, dayClass: 'mg_dh_holiday' },
+      { day: 11, dayClass: 'mg_normal' }
+    ], '2026-08-07'),
+    ['2026-08-03', '2026-08-07']
+  );
+});
+
+test('fails closed on unknown day classes', () => {
+  assert.deepEqual(
+    findScheduledWorkdays('2026-08', [
+      { day: 3, dayClass: '' },
+      { day: 4, dayClass: 'new_unknown_class' },
+      { day: 5, dayClass: 'mg_normal extra' }
+    ]),
+    ['2026-08-05']
+  );
+});
+
+test('fails closed on impossible calendar dates', () => {
+  assert.deepEqual(
+    findScheduledWorkdays('2026-02', [
+      { day: 28, dayClass: 'mg_normal' },
+      { day: 29, dayClass: 'mg_normal' },
+      { day: 31, dayClass: 'mg_normal' }
+    ]),
+    ['2026-02-28']
+  );
+  assert.deepEqual(findScheduledWorkdays('2026-13', [{ day: 1, dayClass: 'mg_normal' }]), []);
 });
