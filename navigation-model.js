@@ -13,5 +13,18 @@
     if (values.some(t => t === '就労管理')) return 'work';
     return 'main';
   }
-  return { chooseWorkdayNavigationAction };
+
+  function matchesApplicationLink(phase, label, href) {
+    const text = String(label || '').replace(/\s+/g, '');
+    const url = String(href || '');
+    if (text.includes('取消')) return false;
+    const spec = phase === 'clockin'
+      ? { label: '自己申告記録（出勤）', route: 'srw_app_gi02' }
+      : phase === 'clockout'
+        ? { label: '自己申告記録（退勤）', route: 'srw_app_gi03' }
+        : { label: '勤務外時間数', route: 'srw_app_gi07' };
+    return text.includes(spec.label) && url.includes(spec.route);
+  }
+
+  return { chooseWorkdayNavigationAction, matchesApplicationLink };
 });

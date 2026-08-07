@@ -179,14 +179,16 @@ function navigateToApplicationMenu() {
 }
 
 function clickApplicationLink(phase) {
-  let linkText, subId;
-  if (phase === 'clockin')       { linkText = '自己申告記録（出勤）'; subId = 'srw_app_gi02'; }
-  else if (phase === 'clockout') { linkText = '自己申告記録（退勤）'; subId = 'srw_app_gi03'; }
-  else                           { linkText = '【裁量労働制】勤務外時間数'; subId = 'srw_app_gi07'; }
+  const linkText = phase === 'clockin' ? '自己申告記録（出勤）'
+    : phase === 'clockout' ? '自己申告記録（退勤）' : '勤務外時間数';
+  const navigation = globalThis.HRNavigation;
 
   const links = document.querySelectorAll('a');
   for (const link of links) {
-    if (link.textContent.trim() === linkText && link.href.includes(subId)) {
+    const matches = navigation && typeof navigation.matchesApplicationLink === 'function'
+      ? navigation.matchesApplicationLink(phase, link.textContent, link.href)
+      : link.textContent.includes(linkText);
+    if (matches) {
       link.click();
       return;
     }
