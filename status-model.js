@@ -71,6 +71,14 @@
     return approval === 'pending' || approval === 'approved' || approval === 'final' || approval === 'complete';
   }
 
+  function historyMessageBody(month, message) {
+    const text = String(message || '');
+    const match = MONTH_PATTERN.exec(String(month || ''));
+    if (!match) return text;
+    const prefix = `${match[1]}年${Number(match[2])}月分：`;
+    return text.startsWith(prefix) ? text.slice(prefix.length) : text;
+  }
+
   function markMonthsStale(months) {
     if (Array.isArray(months)) {
       return months.filter(entry => entry && entry.month).map(entry => Object.assign({}, entry, {
@@ -374,6 +382,7 @@
     backgroundAutomationTimeoutMs,
     chooseReusableCwsTab,
     monthlySubmissionAlreadyHandled,
-    terminalEntryProgress
+    terminalEntryProgress,
+    historyMessageBody
   };
 });

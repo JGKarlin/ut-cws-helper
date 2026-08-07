@@ -823,7 +823,12 @@ function appendTermStatusRow(container, row, staleFallback) {
 }
 
 function historyOutcome(event) {
-  if (event.message) return event.message;
+  if (event.message) {
+    const model = globalThis.HRStatusModel;
+    return model && typeof model.historyMessageBody === 'function'
+      ? model.historyMessageBody(event.month, event.message)
+      : event.message;
+  }
   switch (event.state) {
     case 'submitted-pending': return '提出済み（承認待ち）';
     case 'approved': return '最終承認済み';

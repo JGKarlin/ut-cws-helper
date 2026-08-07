@@ -1203,12 +1203,6 @@ async function reportCurrentMonthHoursCompletion() {
   const month = readDisplayedTermMonth();
   if (!month || month !== currentMonthKey()) return;
 
-  let local;
-  try {
-    local = await chrome.storage.local.get('hrAutoEntryEnabled');
-  } catch (_) { return; }
-  if (!local.hrAutoEntryEnabled) return;
-
   const scheduled = detectScheduledWorkdays(month);
   if (scheduled.error) return;
   const result = detectHoursComplete(scheduled.dates);

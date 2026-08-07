@@ -27,5 +27,5 @@ test('records a verified current-month completion when the live work table is ob
   const start = content.indexOf('async function reportCurrentMonthHoursCompletion');
   const end = content.indexOf('\n}\n', start) + 3;
   const observer = content.slice(start, end);
-  assert.doesNotMatch(observer, /hrSubmitState|hrAutoState|hrScanActive/);
+  assert.doesNotMatch(observer, /hrSubmitState|hrAutoState|hrScanActive|hrAutoEntryEnabled/);
 });

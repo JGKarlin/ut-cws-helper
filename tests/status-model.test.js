@@ -1,10 +1,19 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs, chooseReusableCwsTab, monthlySubmissionAlreadyHandled, terminalEntryProgress;
+let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs, chooseReusableCwsTab, monthlySubmissionAlreadyHandled, terminalEntryProgress, historyMessageBody;
 try {
-  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs, chooseReusableCwsTab, monthlySubmissionAlreadyHandled, terminalEntryProgress } = require('../status-model.js'));
+  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs, chooseReusableCwsTab, monthlySubmissionAlreadyHandled, terminalEntryProgress, historyMessageBody } = require('../status-model.js'));
 } catch (_) {}
+
+test('renders a stored completion message with exactly one month label', () => {
+  assert.equal(typeof historyMessageBody, 'function');
+  assert.equal(
+    historyMessageBody('2026-08', '2026年8月分：勤務時間の入力完了（20勤務日）。出勤・退勤・勤務外時間数を確認済み。'),
+    '勤務時間の入力完了（20勤務日）。出勤・退勤・勤務外時間数を確認済み。'
+  );
+  assert.equal(historyMessageBody('2026-08', '自動処理が完了しました。'), '自動処理が完了しました。');
+});
 
 test('skips monthly submission checks once the cached month is submitted or approved', () => {
   assert.equal(typeof monthlySubmissionAlreadyHandled, 'function');
