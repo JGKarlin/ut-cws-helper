@@ -528,7 +528,7 @@ async function runAutoSubmitCheck() {
 }
 
 // Opt-in: keep the CURRENT month's hours filled — independent of the submission gate.
-// Enters any past-or-present workday that still lacks times (holiday-aware; never
+// Enters every workday in the current month that still lacks times (holiday-aware; never
 // overwrites existing records — detectHoursComplete drives which days are missing).
 // Runs even while a 月次申請 is blocked on a prior month's approval, so July's daily
 // entry is never held up by an unapproved May/June.

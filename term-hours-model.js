@@ -41,13 +41,10 @@
     });
   }
 
-  function findScheduledWorkdays(monthKey, rowFacts, cutoffDate) {
+  function findScheduledWorkdays(monthKey, rowFacts) {
     if (!/^\d{4}-\d{2}$/.test(String(monthKey || ''))) return [];
     const [year, month] = String(monthKey).split('-').map(Number);
     if (month < 1 || month > 12) return [];
-    const cutoff = /^\d{4}-\d{2}-\d{2}$/.test(String(cutoffDate || ''))
-      ? String(cutoffDate)
-      : null;
     const dates = new Set();
 
     (Array.isArray(rowFacts) ? rowFacts : []).forEach(fact => {
@@ -59,7 +56,7 @@
       const calendarDate = new Date(year, month - 1, day);
       if (calendarDate.getFullYear() !== year || calendarDate.getMonth() !== month - 1 || calendarDate.getDate() !== day) return;
       const date = `${monthKey}-${String(day).padStart(2, '0')}`;
-      if (!cutoff || date <= cutoff) dates.add(date);
+      dates.add(date);
     });
 
     return Array.from(dates).sort();

@@ -964,13 +964,6 @@ function currentMonthKey() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
-function currentDateKey() {
-  const nav = getTermNavText();
-  const m = nav.match(/本日は(\d{4})年(\d{1,2})月(\d{1,2})日/);
-  if (m) return `${m[1]}-${String(parseInt(m[2], 10)).padStart(2, '0')}-${String(parseInt(m[3], 10)).padStart(2, '0')}`;
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 // A month is submittable iff the 月次申請 button is present and enabled (confirmed:
 // closed/past months have no button; the actionable month does).
 function isMonthSubmittable() {
@@ -1001,7 +994,7 @@ function detectTermTable() {
 // The live 勤務表 already classifies every date cell. mg_normal is a scheduled
 // workday; Saturday, Sunday, and public holidays use distinct mg_dh_* classes.
 // Reuse that authoritative table instead of the unavailable 本人用実績 calendar.
-function detectScheduledWorkdays(monthKey, cutoffDate) {
+function detectScheduledWorkdays(monthKey) {
   const info = detectTermTable();
   if (!info) return { dates: [], error: '勤務表の勤務時間表が見つかりません' };
   const hoursModel = globalThis.HRTermHours;
@@ -1020,7 +1013,7 @@ function detectScheduledWorkdays(monthKey, cutoffDate) {
     if (day == null || day < 1 || day > 31) continue;
     rowFacts.push({ day, dayClass: cells[0].className || '' });
   }
-  return { dates: hoursModel.findScheduledWorkdays(monthKey, rowFacts, cutoffDate) };
+  return { dates: hoursModel.findScheduledWorkdays(monthKey, rowFacts) };
 }
 
 function scheduledWorkdaysMessage(monthKey, dates) {
@@ -1032,7 +1025,7 @@ function scheduledWorkdaysMessage(monthKey, dates) {
   return `${formatMonthLabel(monthKey)}：対象勤務日を${dates.length}日確認しました${suffix}。`;
 }
 
-async function scanTermWorkdaysStep(monthKey, cutoffDate) {
+async function scanTermWorkdaysStep(monthKey) {
   if (!isTermPage()) return prepareTermPage();
   const current = readDisplayedTermMonth();
   if (!current) return { error: '勤務表の対象月を読み取れませんでした' };
@@ -1043,7 +1036,7 @@ async function scanTermWorkdaysStep(monthKey, cutoffDate) {
     activateElement(btn);
     return { navigating: true, step: `${formatMonthLabel(monthKey)}の勤務表へ移動中...`, waitMs: 1500 };
   }
-  const result = detectScheduledWorkdays(monthKey, cutoffDate);
+  const result = detectScheduledWorkdays(monthKey);
   if (result.error) return { error: result.error };
   return { monthKey, dates: result.dates };
 }
@@ -1420,8 +1413,8 @@ async function runSubmitStateMachine(sub) {
       }
 
       case 'submit-scan-workdays': {
-        // Read the target month's scheduled dates directly from the authoritative
-        // 勤務表. For current-month entry, never queue future dates.
+        // Read the target month's complete scheduled-date set directly from the
+        // authoritative 勤務表 and fill the entire month in one run.
         const target = sub.targetMonth;
         if (sub.workdaysByMonth && Object.prototype.hasOwnProperty.call(sub.workdaysByMonth, target)) {
           return runSubmitStateMachine(await updateSubmit(sub, { phase: 'submit-ensure-month' }));
@@ -1429,13 +1422,12 @@ async function runSubmitStateMachine(sub) {
         if (!isTermPage() || readDisplayedTermMonth() !== target) {
           return runSubmitStateMachine(await updateSubmit(sub, { phase: 'submit-ensure-month' }));
         }
-        const cutoffDate = sub.entryOnly && target === currentMonthKey() ? currentDateKey() : null;
-        const result = detectScheduledWorkdays(target, cutoffDate);
+        const result = detectScheduledWorkdays(target);
         if (result.error) return sendRetryableSubmitError(sub, result.error);
         const dates = result.dates;
         const message = scheduledWorkdaysMessage(target, dates);
         sendProgress(message, submitPercent(sub, 10));
-        emitTermHistoryEvent(target, `workdays-determined-${cutoffDate || 'full-month'}`, 'workdays-determined', message);
+        emitTermHistoryEvent(target, 'workdays-determined-full-month', 'workdays-determined', message);
         const wbm = { ...(sub.workdaysByMonth || {}), [target]: dates };
         return runSubmitStateMachine(await updateSubmit(sub, { phase: 'submit-check-hours', workdaysByMonth: wbm }));
       }
@@ -1571,7 +1563,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === 'SCAN_WORKDAYS_FOR_MONTH') {
-    scanTermWorkdaysStep(msg.monthKey, msg.cutoffDate)
+    scanTermWorkdaysStep(msg.monthKey)
       .then(result => sendResponse(result))
       .catch(err => sendResponse({ error: err.message }));
     return true;

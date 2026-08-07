@@ -90,15 +90,15 @@ test('derives scheduled dates from live 勤務表 day classes', () => {
   );
 });
 
-test('limits current-month scheduled dates through today', () => {
+test('includes the entire current month when run before month end', () => {
   assert.deepEqual(
     findScheduledWorkdays('2026-08', [
       { day: 3, dayClass: 'mg_normal' },
       { day: 7, dayClass: 'mg_normal' },
       { day: 10, dayClass: 'mg_dh_holiday' },
       { day: 11, dayClass: 'mg_normal' }
-    ], '2026-08-07'),
-    ['2026-08-03', '2026-08-07']
+    ]),
+    ['2026-08-03', '2026-08-07', '2026-08-11']
   );
 });
 
