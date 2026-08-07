@@ -283,6 +283,15 @@
     return !!(action && action.month === month && outcome && (outcome.completed || outcome.retryable));
   }
 
+  function cwsAutomationActive(sessionState) {
+    const state = sessionState || {};
+    return !!(state.hrSubmitState || state.hrAutoState);
+  }
+
+  function cwsScanActive(sessionState) {
+    return !!(sessionState && sessionState.hrScanActive);
+  }
+
   return {
     buildMonthRows,
     statusEventsFromSnapshot,
@@ -290,6 +299,8 @@
     markMonthsStale,
     classifyBackgroundOutcome,
     planBackgroundRun,
-    shouldClearBackgroundAction
+    shouldClearBackgroundAction,
+    cwsAutomationActive,
+    cwsScanActive
   };
 });

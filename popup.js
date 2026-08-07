@@ -276,10 +276,6 @@ async function refreshOnDomainUI() {
   setDefaultDates();
   await restoreTermTimeConfig(); // show the saved 出退勤 time range (also used by 月次申請)
   await refreshOnDomainUI();
-  // Opening the panel is a trigger: ask the background to run a check now (it self-gates
-  // on connectivity + enabled flags, and opens its own hidden CWS tab — no need to be on
-  // the CWS page). This is what actually kicks auto-entry without waiting for the alarm.
-  try { chrome.runtime.sendMessage({ type: 'PANEL_OPENED' }); } catch (_) {}
 })();
 
 // The side panel stays open across tab switches/navigations, so re-check the on-domain
@@ -721,6 +717,17 @@ async function discoverTermStatus(isOnDomain) {
   let cache = (await chrome.storage.local.get(TERM_CACHE_KEY))[TERM_CACHE_KEY];
   const fresh = isTermCacheFresh(cache);
 
+  // CWS is effectively single-session: never open a status-scan tab while the
+  // background is determining dates or entering 出勤/退勤 records.
+  try {
+    const session = await chrome.storage.session.get(['hrSubmitState', 'hrAutoState']);
+    if (globalThis.HRStatusModel && globalThis.HRStatusModel.cwsAutomationActive(session)) {
+      const history = (await chrome.storage.local.get(TERM_HISTORY_KEY))[TERM_HISTORY_KEY];
+      renderTermSection(cache, renderState, history);
+      return;
+    }
+  } catch (_) {}
+
   // When a submission is pending (blocked on the previous month's approval), don't trust
   // a fresh cache — re-scan so a since-granted 最終承認 is picked up and the block lifts.
   if ((fresh && !renderState.pending) || !isOnDomain) {
@@ -1026,4 +1033,7 @@ const TERM_ENTRY_KEY = 'hrAutoEntryEnabled';
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const onDomain = !!(tab && tab.url && tab.url.includes('ut-ppsweb.adm.u-tokyo.ac.jp'));
   await discoverTermStatus(onDomain);
+  // Status discovery owns CWS until its hidden tab is closed. Only then trigger
+  // automatic August entry, preventing the server's 画面遷移エラー.
+  try { chrome.runtime.sendMessage({ type: 'PANEL_OPENED' }); } catch (_) {}
 })();

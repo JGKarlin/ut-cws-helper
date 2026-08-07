@@ -1,10 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction;
+let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive;
 try {
-  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction } = require('../status-model.js'));
+  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive } = require('../status-model.js'));
 } catch (_) {}
+
+test('serializes CWS status scans and automation runs', () => {
+  assert.equal(cwsAutomationActive({ hrSubmitState: { phase: 'submit-nav' } }), true);
+  assert.equal(cwsAutomationActive({ hrAutoState: { phase: 'clockin' } }), true);
+  assert.equal(cwsAutomationActive({}), false);
+  assert.equal(cwsScanActive({ hrScanActive: true }), true);
+  assert.equal(cwsScanActive({ hrScanActive: false }), false);
+});
 
 test('keeps June visible as submitted and awaiting approval', () => {
   assert.equal(typeof buildMonthRows, 'function');

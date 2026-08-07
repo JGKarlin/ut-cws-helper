@@ -547,6 +547,13 @@ async function runDailyCheck() {
   // Only act when CWS is actually reachable (campus or VPN). Off-network, skip quietly
   // without opening a tab — the next daily alarm will try again.
   if (!(await isConnected())) return;
+  // The UTokyo CWS session rejects simultaneous navigation from two tabs. If the
+  // side panel is scanning submission status, let it finish and retry from PANEL_OPENED.
+  try {
+    const session = await chrome.storage.session.get('hrScanActive');
+    const model = globalThis.HRStatusModel;
+    if (model && model.cwsScanActive && model.cwsScanActive(session)) return;
+  } catch (_) {}
   // Current-month hours entry runs first and independently of the submission gate.
   if (s.hrAutoEntryEnabled) await runCurrentMonthEntryCheck();
   if (s.hrPendingSubmit) { await runPendingRetry(); return; }
