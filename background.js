@@ -307,6 +307,12 @@ function backgroundRunPlan(existingRun, now) {
   return { start: !existingRun, ownsRun: !existingRun, staleMonth: null };
 }
 
+function shouldClearAction(action, month, outcome) {
+  const model = globalThis.HRStatusModel;
+  if (model && model.shouldClearBackgroundAction) return model.shouldClearBackgroundAction(action, month, outcome);
+  return !!(action && action.month === month && outcome && (outcome.completed || outcome.retryable));
+}
+
 function blockerSignature(month, progress) {
   const value = progress || {};
   const blocker = value.signature || value.message || (value.timeout ? 'timeout' : 'error');
@@ -348,6 +354,7 @@ async function recordBackgroundOutcome(month, progress) {
         'failed',
         (progress && progress.message) || '自動処理に失敗しました。次回の自動確認で再試行します。'
       ));
+      if (shouldClearAction(stored[USER_ACTION_KEY], month, outcome)) patch[USER_ACTION_KEY] = null;
     } else if (outcome.completed) {
       const waiting = !!(progress && progress.waitingApproval);
       history = appendTermHistory(history, historyEvent(
@@ -356,7 +363,7 @@ async function recordBackgroundOutcome(month, progress) {
         waiting ? 'waiting-approval' : 'processing-completed',
         waiting ? '前月の最終承認待ちのため、自動確認を継続します。' : '自動処理が完了しました。'
       ));
-      if (stored[USER_ACTION_KEY] && stored[USER_ACTION_KEY].month === month) patch[USER_ACTION_KEY] = null;
+      if (shouldClearAction(stored[USER_ACTION_KEY], month, outcome)) patch[USER_ACTION_KEY] = null;
     } else {
       const signature = blockerSignature(month, progress);
       const action = Object.assign({}, outcome.userAction, { since: Date.now(), signature });
@@ -471,6 +478,7 @@ async function driveSubmitInBackgroundTab(sub) {
     if (tracksMonthlySubmission) {
       await recordBackgroundOutcome(month, {
         error: true,
+        infrastructure: true,
         message: (err && err.message) || '自動申請中にエラーが発生しました。'
       });
     }

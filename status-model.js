@@ -255,7 +255,7 @@
 
   function classifyBackgroundOutcome(month, progress) {
     const value = progress || {};
-    if (value.retryable) return { completed: false, retryable: true, userAction: null };
+    if (value.retryable || value.infrastructure) return { completed: false, retryable: true, userAction: null };
     if (value.error || value.timeout) {
       return {
         completed: false,
@@ -279,12 +279,17 @@
     };
   }
 
+  function shouldClearBackgroundAction(action, month, outcome) {
+    return !!(action && action.month === month && outcome && (outcome.completed || outcome.retryable));
+  }
+
   return {
     buildMonthRows,
     statusEventsFromSnapshot,
     appendHistoryEvent,
     markMonthsStale,
     classifyBackgroundOutcome,
-    planBackgroundRun
+    planBackgroundRun,
+    shouldClearBackgroundAction
   };
 });

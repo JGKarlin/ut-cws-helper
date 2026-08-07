@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun;
+let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction;
 try {
-  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun } = require('../status-model.js'));
+  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction } = require('../status-model.js'));
 } catch (_) {}
 
 test('keeps June visible as submitted and awaiting approval', () => {
@@ -217,4 +217,18 @@ test('treats an operational failure as retryable without a manual action', () =>
     }),
     { completed: false, retryable: true, userAction: null }
   );
+});
+
+test('classifies worker infrastructure exceptions as retryable', () => {
+  assert.deepEqual(
+    classifyBackgroundOutcome('2026-07', { error: true, infrastructure: true, message: 'hidden tab closed' }),
+    { completed: false, retryable: true, userAction: null }
+  );
+});
+
+test('clears only the matching stale action after a retryable outcome', () => {
+  assert.equal(typeof shouldClearBackgroundAction, 'function');
+  const retryable = { completed: false, retryable: true, userAction: null };
+  assert.equal(shouldClearBackgroundAction({ month: '2026-07' }, '2026-07', retryable), true);
+  assert.equal(shouldClearBackgroundAction({ month: '2026-06' }, '2026-07', retryable), false);
 });
