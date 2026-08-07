@@ -52,6 +52,13 @@
     return stateFromLiveEntry(entry, autoSubmitEnabled);
   }
 
+  function hasAuthoritativeLiveStatus(entry) {
+    const value = entry || {};
+    if (value.stale === true || value.staleFallback === true || value.fresh === false || value.source === 'stale') return false;
+    const approval = String(value.approval || '').toLowerCase();
+    return value.submitted === true || (approval !== '' && approval !== 'none');
+  }
+
   function referenceMonths(input) {
     const references = [];
     if (input && input.pending) {
@@ -88,12 +95,13 @@
     const rows = Array.from(entries.values()).map(entry => {
       const month = entry.month;
       let state = stateFromEntry(entry, autoSubmitEnabled);
+      const persistedMayOverride = !hasAuthoritativeLiveStatus(entry);
 
-      if (userAction.month === month) {
+      if (persistedMayOverride && userAction.month === month) {
         state = 'user-action-required';
-      } else if (activeRun.month === month && activeRun.state !== 'completed' && activeRun.state !== 'failed') {
+      } else if (persistedMayOverride && activeRun.month === month && activeRun.state !== 'completed' && activeRun.state !== 'failed') {
         state = 'processing';
-      } else if (pending.targetMonth === month && pending.prevMonth && pending.prevMonth !== month) {
+      } else if (persistedMayOverride && pending.targetMonth === month && pending.prevMonth && pending.prevMonth !== month) {
         const previous = entries.get(pending.prevMonth);
         const previousApproval = String(previous && previous.approval || '').toLowerCase();
         if (!previous || previousApproval === 'pending' || previousApproval === 'none' || !previousApproval) {
@@ -175,7 +183,7 @@
     const oldestIndex = monthIndex(oldest);
     return result.filter(item => {
       const itemIndex = monthIndex(item && item.month);
-      return itemIndex !== null && itemIndex >= oldestIndex;
+      return itemIndex !== null && itemIndex >= oldestIndex && itemIndex <= monthIndex(currentMonth);
     });
   }
 

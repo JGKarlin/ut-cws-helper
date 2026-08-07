@@ -50,3 +50,30 @@ test('records a live correction without deleting earlier history', () => {
   );
   assert.deepEqual(events.map(e => [e.month, e.state]), [['2026-06', 'submitted-pending']]);
 });
+
+test('newer live approval outranks stale persisted action state', () => {
+  const rows = buildMonthRows({
+    currentMonth: '2026-08',
+    months: {
+      '2026-06': { month: '2026-06', approval: 'approved', submitted: true, submittable: false },
+      '2026-07': { month: '2026-07', approval: 'approved', submitted: true, submittable: false }
+    },
+    pending: { targetMonth: '2026-07', prevMonth: '2026-06' },
+    activeRun: { month: '2026-07', state: 'processing' },
+    userAction: { month: '2026-07', message: '古い失敗' },
+    autoSubmitEnabled: true
+  });
+  const july = rows.find(row => row.month === '2026-07');
+  assert.equal(july.state, 'approved');
+  assert.equal(july.actionMonth, undefined);
+});
+
+test('drops future history events outside the current 12-month window', () => {
+  const retained = appendHistoryEvent(
+    [{ id: '2026-08:approved:approved', month: '2026-08', type: 'approved', state: 'approved', at: 1 }],
+    { month: '2026-09', type: 'submitted', state: 'submitted-pending', at: 2 },
+    '2026-08'
+  );
+  assert.equal(retained.some(event => event.month === '2026-09'), false);
+  assert.equal(retained.some(event => event.month === '2026-08'), true);
+});
