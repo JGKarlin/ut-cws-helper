@@ -25,15 +25,18 @@
     (Array.isArray(rowFacts) ? rowFacts : []).forEach(fact => {
       if (!fact || fact.day == null) return;
       const day = Number(fact.day);
-      if (Number.isInteger(day) && day >= 1 && day <= 31) factsByDay.set(day, fact);
+      if (!Number.isInteger(day) || day < 1 || day > 31) return;
+      const facts = factsByDay.get(day) || [];
+      facts.push(fact);
+      factsByDay.set(day, facts);
     });
 
     return (Array.isArray(workdays) ? workdays : []).filter(workday => {
       const day = dayFromWorkday(workday);
-      const fact = day === null ? null : factsByDay.get(day);
-      if (!fact) return true;
-      if (isFullDayPaidLeave(fact.rowText)) return false;
-      return !fact.hasArrival || !fact.hasDeparture;
+      const facts = day === null ? [] : (factsByDay.get(day) || []);
+      if (!facts.length) return true;
+      if (facts.some(fact => isFullDayPaidLeave(fact.rowText))) return false;
+      return facts.some(fact => !fact.hasArrival || !fact.hasDeparture);
     });
   }
 
