@@ -988,9 +988,13 @@ function detectTermTable() {
 function detectHoursComplete(workdays) {
   const info = detectTermTable();
   if (!info) return { complete: false, missing: [], error: '勤務表の勤務時間表が見つかりません' };
+  const hoursModel = globalThis.HRTermHours;
+  if (!hoursModel || typeof hoursModel.findMissingWorkdays !== 'function') {
+    return { complete: false, missing: [], error: '勤務時間の安全判定モデルを読み込めませんでした' };
+  }
   const { table, inCol, outCol } = info;
   const timeRe = /\d{1,2}時\d{1,2}分/;
-  const dayMap = {};
+  const rowFacts = [];
   for (const row of table.rows) {
     const cells = row.cells;
     if (cells.length <= Math.max(inCol, outCol)) continue;
@@ -1003,13 +1007,14 @@ function detectHoursComplete(workdays) {
     if (dd == null || dd < 1 || dd > 31) continue;
     const inT = normalizeDigits(cells[inCol].textContent || '');
     const outT = normalizeDigits(cells[outCol].textContent || '');
-    dayMap[dd] = timeRe.test(inT) && timeRe.test(outT);
+    rowFacts.push({
+      day: dd,
+      hasArrival: timeRe.test(inT),
+      hasDeparture: timeRe.test(outT),
+      rowText: normalizeDigits(row.textContent || '')
+    });
   }
-  const missing = [];
-  for (const wd of (workdays || [])) {
-    const dd = parseInt(wd.split('-')[2], 10);
-    if (!dayMap[dd]) missing.push(wd);
-  }
+  const missing = hoursModel.findMissingWorkdays(workdays, rowFacts);
   return { complete: missing.length === 0, missing };
 }
 
