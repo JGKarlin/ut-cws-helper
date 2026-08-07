@@ -36,7 +36,8 @@
       const facts = day === null ? [] : (factsByDay.get(day) || []);
       if (!facts.length) return true;
       if (facts.some(fact => isFullDayPaidLeave(fact.rowText))) return false;
-      return facts.some(fact => !fact.hasArrival || !fact.hasDeparture);
+      if (facts.some(fact => fact.hasArrival && fact.hasDeparture)) return false;
+      return true;
     });
   }
 

@@ -62,9 +62,16 @@ test('excludes duplicate July 10 rows when full-day leave appears first or last'
   assert.deepEqual(findMissingWorkdays(['2026-07-10'], [blank, leave]), []);
 });
 
-test('does not let a blank duplicate falsely complete a day without leave', () => {
+test('treats any complete duplicate as date-level completion without leave', () => {
   const complete = { day: 10, hasArrival: true, hasDeparture: true, rowText: '7/10 金 9時00分 18時00分' };
   const blank = { day: 10, hasArrival: false, hasDeparture: false, rowText: '7/10 金' };
-  assert.deepEqual(findMissingWorkdays(['2026-07-10'], [complete, blank]), ['2026-07-10']);
-  assert.deepEqual(findMissingWorkdays(['2026-07-10'], [blank, complete]), ['2026-07-10']);
+  assert.deepEqual(findMissingWorkdays(['2026-07-10'], [complete, blank]), []);
+  assert.deepEqual(findMissingWorkdays(['2026-07-10'], [blank, complete]), []);
+});
+
+test('keeps a partial and blank duplicate missing without leave', () => {
+  const partial = { day: 10, hasArrival: true, hasDeparture: false, rowText: '7/10 金 9時00分' };
+  const blank = { day: 10, hasArrival: false, hasDeparture: false, rowText: '7/10 金' };
+  assert.deepEqual(findMissingWorkdays(['2026-07-10'], [partial, blank]), ['2026-07-10']);
+  assert.deepEqual(findMissingWorkdays(['2026-07-10'], [blank, partial]), ['2026-07-10']);
 });
