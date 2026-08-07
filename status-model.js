@@ -292,6 +292,11 @@
     return !!(sessionState && sessionState.hrScanActive);
   }
 
+  function shouldRunStatusScan(options) {
+    const value = options || {};
+    return !value.autoEntryEnabled && !value.automationActive;
+  }
+
   return {
     buildMonthRows,
     statusEventsFromSnapshot,
@@ -301,6 +306,7 @@
     planBackgroundRun,
     shouldClearBackgroundAction,
     cwsAutomationActive,
-    cwsScanActive
+    cwsScanActive,
+    shouldRunStatusScan
   };
 });

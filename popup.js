@@ -717,11 +717,18 @@ async function discoverTermStatus(isOnDomain) {
   let cache = (await chrome.storage.local.get(TERM_CACHE_KEY))[TERM_CACHE_KEY];
   const fresh = isTermCacheFresh(cache);
 
-  // CWS is effectively single-session: never open a status-scan tab while the
-  // background is determining dates or entering 出勤/退勤 records.
+  // CWS is effectively single-session. When automatic current-month entry is
+  // enabled, reserve it exclusively for that full-month run; do not launch the
+  // backward June/July status walker from the panel.
   try {
+    const local = await chrome.storage.local.get(TERM_ENTRY_KEY);
     const session = await chrome.storage.session.get(['hrSubmitState', 'hrAutoState']);
-    if (globalThis.HRStatusModel && globalThis.HRStatusModel.cwsAutomationActive(session)) {
+    const model = globalThis.HRStatusModel;
+    const automationActive = !!(model && model.cwsAutomationActive(session));
+    const shouldScan = model && model.shouldRunStatusScan
+      ? model.shouldRunStatusScan({ autoEntryEnabled: !!local[TERM_ENTRY_KEY], automationActive })
+      : !local[TERM_ENTRY_KEY] && !automationActive;
+    if (!shouldScan) {
       const history = (await chrome.storage.local.get(TERM_HISTORY_KEY))[TERM_HISTORY_KEY];
       renderTermSection(cache, renderState, history);
       return;
