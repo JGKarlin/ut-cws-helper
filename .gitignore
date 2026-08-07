@@ -13,5 +13,8 @@
 # Release artifacts
 *.zip
 
+# Isolated implementation worktrees
+.worktrees/
+
 # Claude Code project guidance (local only)
 CLAUDE.md
