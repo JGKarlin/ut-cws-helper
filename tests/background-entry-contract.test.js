@@ -23,4 +23,9 @@ test('records a verified current-month completion when the live work table is ob
   assert.match(content, /detectScheduledWorkdays\(month\)/);
   assert.match(content, /detectHoursComplete\(scheduled\.dates\)/);
   assert.match(content, /await emitTermHistoryEvent\(month, 'hours-complete', 'hours-complete', message\)/);
+
+  const start = content.indexOf('async function reportCurrentMonthHoursCompletion');
+  const end = content.indexOf('\n}\n', start) + 3;
+  const observer = content.slice(start, end);
+  assert.doesNotMatch(observer, /hrSubmitState|hrAutoState|hrScanActive/);
 });

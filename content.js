@@ -1204,12 +1204,10 @@ async function reportCurrentMonthHoursCompletion() {
   if (!month || month !== currentMonthKey()) return;
 
   let local;
-  let session;
   try {
     local = await chrome.storage.local.get('hrAutoEntryEnabled');
-    session = await chrome.storage.session.get(['hrSubmitState', 'hrAutoState', 'hrScanActive']);
   } catch (_) { return; }
-  if (!local.hrAutoEntryEnabled || session.hrSubmitState || session.hrAutoState || session.hrScanActive) return;
+  if (!local.hrAutoEntryEnabled) return;
 
   const scheduled = detectScheduledWorkdays(month);
   if (scheduled.error) return;
