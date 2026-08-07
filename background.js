@@ -482,13 +482,22 @@ async function driveSubmitInBackgroundTab(sub) {
     }
 
     const progress = await waitForRetryCompletion(RETRY_TIMEOUT_MS);
-    if (tracksMonthlySubmission) await recordBackgroundOutcome(month, progress || { timeout: true });
+    if (tracksMonthlySubmission || progress?.timeout || progress?.error) {
+      const recordedProgress = sub.entryOnly && progress && progress.timeout
+        ? Object.assign({}, progress, {
+            message: '勤務時間の自動入力が時間内に完了しませんでした。次回の自動確認で再試行します。'
+          })
+        : progress;
+      await recordBackgroundOutcome(month, recordedProgress || { timeout: true });
+    }
   } catch (err) {
-    if (tracksMonthlySubmission) {
+    if (tracksMonthlySubmission || (sub && sub.entryOnly)) {
       await recordBackgroundOutcome(month, {
         error: true,
         infrastructure: true,
-        message: (err && err.message) || '自動申請中にエラーが発生しました。'
+        message: (err && err.message) || (sub && sub.entryOnly
+          ? '勤務時間の自動入力中にエラーが発生しました。次回の自動確認で再試行します。'
+          : '自動申請中にエラーが発生しました。')
       });
     }
   } finally {
@@ -535,7 +544,11 @@ async function runAutoSubmitCheck() {
   const target = prevMonthKey();
   // Already submitted (per the last status scan) → nothing to do; don't reopen a tab.
   const cached = s.hrTermStatusCache && s.hrTermStatusCache.months && s.hrTermStatusCache.months[target];
-  if (cached && cached.submitted) return;
+  const statusModel = globalThis.HRStatusModel;
+  const alreadyHandled = statusModel && typeof statusModel.monthlySubmissionAlreadyHandled === 'function'
+    ? statusModel.monthlySubmissionAlreadyHandled(cached)
+    : !!(cached && (cached.submitted || ['pending', 'approved', 'final', 'complete'].includes(String(cached.approval || '').toLowerCase())));
+  if (alreadyHandled) return;
   await driveSubmitInBackgroundTab({
     queue: [target], queueIndex: 0, targetMonth: target, phase: 'submit-nav',
     config: await getTermConfig(), workdaysByMonth: {}, navStep: null, auto: true,

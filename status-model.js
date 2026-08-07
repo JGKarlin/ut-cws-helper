@@ -64,6 +64,13 @@
     return state === 'submitted-pending' || state === 'approved' || state === 'returned';
   }
 
+  function monthlySubmissionAlreadyHandled(entry) {
+    const value = entry || {};
+    if (value.submitted === true) return true;
+    const approval = String(value.approval || '').toLowerCase();
+    return approval === 'pending' || approval === 'approved' || approval === 'final' || approval === 'complete';
+  }
+
   function markMonthsStale(months) {
     if (Array.isArray(months)) {
       return months.filter(entry => entry && entry.month).map(entry => Object.assign({}, entry, {
@@ -342,6 +349,7 @@
     cwsAutomationStartupCleanupKeys,
     planCwsScanLock,
     backgroundAutomationTimeoutMs,
-    chooseReusableCwsTab
+    chooseReusableCwsTab,
+    monthlySubmissionAlreadyHandled
   };
 });

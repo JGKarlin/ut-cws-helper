@@ -79,8 +79,16 @@ function notify(title, message) {
   try { chrome.runtime.sendMessage({ type: 'NOTIFY', title, message }); } catch (_) {}
 }
 
-function emitTermHistoryEvent(month, type, state, message) {
-  sendToPopup({ type: 'TERM_HISTORY_EVENT', month, type, state, message, at: Date.now() });
+async function emitTermHistoryEvent(month, type, state, message) {
+  if (!extensionAlive()) return false;
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'TERM_HISTORY_EVENT', month, type, state, message, at: Date.now()
+    });
+    return !(response && response.error);
+  } catch (_) {
+    return false;
+  }
 }
 
 // ── DOM Utilities ─────────────────────────────────────────────────────────────
@@ -1429,7 +1437,10 @@ async function runSubmitStateMachine(sub) {
               return sendRetryableSubmitError(sub, '勤務時間の完了履歴モデルを読み込めませんでした');
             }
             const message = completionModel.completedHoursMessage(sub.targetMonth, workdays.length);
-            emitTermHistoryEvent(sub.targetMonth, 'hours-complete', 'hours-complete', message);
+            const historyRecorded = await emitTermHistoryEvent(sub.targetMonth, 'hours-complete', 'hours-complete', message);
+            if (!historyRecorded) {
+              return sendRetryableSubmitError(sub, '勤務時間の完了履歴を保存できませんでした');
+            }
             return sendTerminalSubmitDone(message);
           }
           // Hours done. Verify the previous period is approved before submitting (unless already checked).

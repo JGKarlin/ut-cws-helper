@@ -1,10 +1,21 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs, chooseReusableCwsTab;
+let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs, chooseReusableCwsTab, monthlySubmissionAlreadyHandled;
 try {
-  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs, chooseReusableCwsTab } = require('../status-model.js'));
+  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs, chooseReusableCwsTab, monthlySubmissionAlreadyHandled } = require('../status-model.js'));
 } catch (_) {}
+
+test('skips monthly submission checks once the cached month is submitted or approved', () => {
+  assert.equal(typeof monthlySubmissionAlreadyHandled, 'function');
+  assert.equal(monthlySubmissionAlreadyHandled({ submitted: true, approval: 'pending' }), true);
+  assert.equal(monthlySubmissionAlreadyHandled({ submitted: false, approval: 'approved' }), true);
+  assert.equal(monthlySubmissionAlreadyHandled({ approval: 'final' }), true);
+  assert.equal(monthlySubmissionAlreadyHandled({ approval: 'complete' }), true);
+  assert.equal(monthlySubmissionAlreadyHandled({ approval: 'pending' }), true);
+  assert.equal(monthlySubmissionAlreadyHandled({ approval: 'returned' }), false);
+  assert.equal(monthlySubmissionAlreadyHandled(null), false);
+});
 
 test('reuses the tracked automation tab before any other CWS tab', () => {
   assert.equal(typeof chooseReusableCwsTab, 'function');
