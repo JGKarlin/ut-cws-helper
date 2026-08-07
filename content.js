@@ -657,31 +657,40 @@ function findLinkByTextPred(pred) {
  *  Every branch performs a real navigation (clicked:true) → the state machine
  *  re-enters on the resulting page load. */
 async function clickWorkdayCalendarLink() {
-  if (isWorkdayCalendarPage()) {
+  const navigationAction = HRNavigation.chooseWorkdayNavigationAction(
+    getNavigationElements().map(getNavigationText).filter(Boolean),
+    isWorkdayCalendarPage()
+  );
+
+  if (navigationAction === 'ready') {
     await clearWorkdayScanNavStep();
     return { ready: true };
   }
 
-  // 1. Final hop: the 本人用実績入力 link (on the 本人用実績 page).
-  const inputLink = findLinkByTextPred(t => t.includes('本人用実績入力'));
-  if (inputLink && activateElement(inputLink)) {
-    return { navigating: true, clicked: true, step: '本人用実績入力へ移動中...', waitMs: 1500 };
+  const actionDetails = {
+    input: {
+      matches: t => t.includes('本人用実績入力'),
+      step: '本人用実績入力へ移動中...'
+    },
+    performance: {
+      matches: t => t.includes('本人用実績') && !t.includes('本人用実績入力'),
+      step: '本人用実績メニューへ移動中...'
+    },
+    menu: {
+      matches: t => t.includes('就労メインページ') || t.includes('本人用メニュー') || t.includes('メインページ'),
+      step: '就労メインページへ移動中...'
+    },
+    work: {
+      matches: t => t === '就労管理',
+      step: '就労管理へ移動中...'
+    }
+  }[navigationAction];
+  const link = actionDetails && findLinkByTextPred(actionDetails.matches);
+  if (link && activateElement(link)) {
+    return { navigating: true, clicked: true, step: actionDetails.step, waitMs: 1500 };
   }
 
-  // 2. The 本人用実績 link (on the 本人用メニュー) — exclude 本人用実績入力.
-  const perfLink = findLinkByTextPred(t => t.includes('本人用実績') && !t.includes('本人用実績入力'));
-  if (perfLink && activateElement(perfLink)) {
-    return { navigating: true, clicked: true, step: '本人用実績メニューへ移動中...', waitMs: 1500 };
-  }
-
-  // 3. Back to the 本人用メニュー via 就労メインページ (present on the 勤務表 etc.).
-  const menuLink = findLinkByTextPred(t =>
-    t.includes('就労メインページ') || t.includes('本人用メニュー') || t.includes('メインページ'));
-  if (menuLink && activateElement(menuLink)) {
-    return { navigating: true, clicked: true, step: '就労メインページへ移動中...', waitMs: 1500 };
-  }
-
-  // 4. Nothing recognizable on this page — reload the main CWS page and retry.
+  // No recognizable navigation link — reload the main CWS page and retry.
   window.location.href = MAIN_CWS_URL;
   return { navigating: true, clicked: true, step: '就労メインページへ移動中...', waitMs: 1800 };
 }

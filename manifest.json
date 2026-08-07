@@ -37,7 +37,7 @@
   "content_scripts": [
     {
       "matches": ["https://ut-ppsweb.adm.u-tokyo.ac.jp/*"],
-      "js": ["content.js"],
+      "js": ["navigation-model.js", "content.js"],
       "run_at": "document_idle"
     }
   ]
