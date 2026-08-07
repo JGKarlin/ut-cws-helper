@@ -21,6 +21,7 @@ try {
 
 const MAIN_CWS_URL = 'https://ut-ppsweb.adm.u-tokyo.ac.jp/cws/cws';
 const RETRY_ALARM = 'hrTermRetry';
+const AUTOMATION_TAB_KEY = 'hrAutomationTabId';
 const RETRY_TIMEOUT_MS = globalThis.HRStatusModel &&
   typeof globalThis.HRStatusModel.backgroundAutomationTimeoutMs === 'function'
   ? globalThis.HRStatusModel.backgroundAutomationTimeoutMs()
@@ -466,6 +467,7 @@ async function driveSubmitInBackgroundTab(sub) {
 
     const tab = await chrome.tabs.create({ url: MAIN_CWS_URL, active: false });
     tabId = tab.id;
+    await chrome.storage.session.set({ [AUTOMATION_TAB_KEY]: tabId });
 
     // Session expired → CWS bounced to login (foreground work). Prompt and bail; the
     // pending/auto state stays put, so it resumes after the user logs in (CWS_READY)
@@ -490,6 +492,12 @@ async function driveSubmitInBackgroundTab(sub) {
       });
     }
   } finally {
+    if (tabId != null) {
+      try {
+        const tracked = (await chrome.storage.session.get(AUTOMATION_TAB_KEY))[AUTOMATION_TAB_KEY];
+        if (tracked === tabId) await chrome.storage.session.remove(AUTOMATION_TAB_KEY);
+      } catch (_) {}
+    }
     if (tabId != null) { try { await chrome.tabs.remove(tabId); } catch (_) {} }
     if (ownsSessionState) {
       try { await chrome.storage.session.remove('hrSubmitState'); } catch (_) {}

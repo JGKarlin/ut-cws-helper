@@ -289,9 +289,20 @@ chrome.tabs.onUpdated.addListener((_id, changeInfo, tab) => {
 // ── Open system link ─────────────────────────────────────────────────────────
 document.getElementById('btnOpenSystem').addEventListener('click', async (e) => {
   e.preventDefault();
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return;
-  chrome.tabs.update(tab.id, { url: 'https://ut-ppsweb.adm.u-tokyo.ac.jp/cws/cws' });
+  const tracked = (await chrome.storage.session.get('hrAutomationTabId')).hrAutomationTabId;
+  const tabs = await chrome.tabs.query({ url: 'https://ut-ppsweb.adm.u-tokyo.ac.jp/*' });
+  const model = globalThis.HRStatusModel;
+  const reusable = model && typeof model.chooseReusableCwsTab === 'function'
+    ? model.chooseReusableCwsTab(tracked, tabs)
+    : null;
+  if (reusable) {
+    await chrome.tabs.update(reusable.id, { active: true });
+    if (Number.isInteger(reusable.windowId)) {
+      await chrome.windows.update(reusable.windowId, { focused: true });
+    }
+    return;
+  }
+  await chrome.tabs.create({ url: CWS_MAIN_URL, active: true });
 });
 
 // ── Mode toggle ──────────────────────────────────────────────────────────────

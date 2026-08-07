@@ -1,10 +1,22 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs;
+let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs, chooseReusableCwsTab;
 try {
-  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs } = require('../status-model.js'));
+  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs, chooseReusableCwsTab } = require('../status-model.js'));
 } catch (_) {}
+
+test('reuses the tracked automation tab before any other CWS tab', () => {
+  assert.equal(typeof chooseReusableCwsTab, 'function');
+  const tabs = [
+    { id: 10, url: 'https://ut-ppsweb.adm.u-tokyo.ac.jp/cws/cws', lastAccessed: 1 },
+    { id: 20, url: 'https://ut-ppsweb.adm.u-tokyo.ac.jp/cws/cws', lastAccessed: 2 }
+  ];
+  assert.equal(chooseReusableCwsTab(10, tabs).id, 10);
+  assert.equal(chooseReusableCwsTab(999, tabs).id, 20);
+  assert.equal(chooseReusableCwsTab(30, [{ id: 30, url: 'https://example.com/' }]), null);
+  assert.equal(chooseReusableCwsTab(null, []), null);
+});
 
 test('allows enough time for a complete full-month background entry run', () => {
   assert.equal(typeof backgroundAutomationTimeoutMs, 'function');

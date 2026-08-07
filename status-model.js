@@ -316,6 +316,18 @@
     return 20 * 60 * 1000;
   }
 
+  function chooseReusableCwsTab(trackedTabId, tabs) {
+    const cwsTabs = (Array.isArray(tabs) ? tabs : []).filter(tab =>
+      tab && Number.isInteger(tab.id) &&
+      String(tab.url || '').startsWith('https://ut-ppsweb.adm.u-tokyo.ac.jp/')
+    );
+    const tracked = cwsTabs.find(tab => tab.id === trackedTabId);
+    if (tracked) return tracked;
+    return cwsTabs.slice().sort((left, right) =>
+      Number(right.lastAccessed || 0) - Number(left.lastAccessed || 0)
+    )[0] || null;
+  }
+
   return {
     buildMonthRows,
     statusEventsFromSnapshot,
@@ -329,6 +341,7 @@
     shouldRunStatusScan,
     cwsAutomationStartupCleanupKeys,
     planCwsScanLock,
-    backgroundAutomationTimeoutMs
+    backgroundAutomationTimeoutMs,
+    chooseReusableCwsTab
   };
 });
