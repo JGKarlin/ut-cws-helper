@@ -255,6 +255,7 @@
 
   function classifyBackgroundOutcome(month, progress) {
     const value = progress || {};
+    if (value.retryable) return { completed: false, retryable: true, userAction: null };
     if (value.error || value.timeout) {
       return {
         completed: false,
@@ -268,5 +269,22 @@
     return { completed: false, userAction: null };
   }
 
-  return { buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome };
+  function planBackgroundRun(existingRun, now, timeoutMs) {
+    const startedAt = Number(existingRun && existingRun.startedAt || 0);
+    const active = !!(existingRun && existingRun.month && startedAt > 0 && now - startedAt < timeoutMs);
+    return {
+      start: !active,
+      ownsRun: !active,
+      staleMonth: active || !existingRun || !existingRun.month ? null : existingRun.month
+    };
+  }
+
+  return {
+    buildMonthRows,
+    statusEventsFromSnapshot,
+    appendHistoryEvent,
+    markMonthsStale,
+    classifyBackgroundOutcome,
+    planBackgroundRun
+  };
 });

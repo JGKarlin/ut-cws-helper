@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome;
+let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun;
 try {
-  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome } = require('../status-model.js'));
+  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun } = require('../status-model.js'));
 } catch (_) {}
 
 test('keeps June visible as submitted and awaiting approval', () => {
@@ -197,5 +197,24 @@ test('requires user action for an error but not an approval wait', () => {
   assert.deepEqual(
     classifyBackgroundOutcome('2026-07', { done: true, waitingApproval: true }),
     { completed: true, userAction: null }
+  );
+});
+
+test('keeps an active persisted background run owned by its original worker', () => {
+  assert.equal(typeof planBackgroundRun, 'function');
+  assert.deepEqual(
+    planBackgroundRun({ month: '2026-07', state: 'processing', startedAt: 5000 }, 6000, 180000),
+    { start: false, ownsRun: false, staleMonth: null }
+  );
+});
+
+test('treats an operational failure as retryable without a manual action', () => {
+  assert.deepEqual(
+    classifyBackgroundOutcome('2026-07', {
+      error: true,
+      retryable: true,
+      message: '本人用実績入力ページへ移動できませんでした。'
+    }),
+    { completed: false, retryable: true, userAction: null }
   );
 });

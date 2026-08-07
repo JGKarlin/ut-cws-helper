@@ -301,6 +301,12 @@ function backgroundOutcome(month, progress) {
   return { completed: false, userAction: null };
 }
 
+function backgroundRunPlan(existingRun, now) {
+  const model = globalThis.HRStatusModel;
+  if (model && model.planBackgroundRun) return model.planBackgroundRun(existingRun, now, RETRY_TIMEOUT_MS);
+  return { start: !existingRun, ownsRun: !existingRun, staleMonth: null };
+}
+
 function blockerSignature(month, progress) {
   const value = progress || {};
   const blocker = value.signature || value.message || (value.timeout ? 'timeout' : 'error');
@@ -323,7 +329,7 @@ async function recordBackgroundRunStart(month, startedAt) {
 
 async function recordBackgroundOutcome(month, progress) {
   const outcome = backgroundOutcome(month, progress);
-  if (!outcome.completed && !outcome.userAction) return;
+  if (!outcome.completed && !outcome.retryable && !outcome.userAction) return;
 
   return mutateTermLedger(async () => {
     const stored = await chrome.storage.local.get([
@@ -335,7 +341,14 @@ async function recordBackgroundOutcome(month, progress) {
     const patch = {};
     let notification = null;
 
-    if (outcome.completed) {
+    if (outcome.retryable) {
+      history = appendTermHistory(history, historyEvent(
+        month,
+        'failed',
+        'failed',
+        (progress && progress.message) || '自動処理に失敗しました。次回の自動確認で再試行します。'
+      ));
+    } else if (outcome.completed) {
       const waiting = !!(progress && progress.waitingApproval);
       history = appendTermHistory(history, historyEvent(
         month,
@@ -361,6 +374,16 @@ async function recordBackgroundOutcome(month, progress) {
     patch[TERM_HISTORY_KEY] = history;
     await chrome.storage.local.set(patch);
     if (notification) showNotification('月次申請に確認が必要です', notification);
+  });
+}
+
+async function recordBackgroundPause(month, state, message) {
+  return mutateTermLedger(async () => {
+    const stored = await chrome.storage.local.get([TERM_HISTORY_KEY, USER_ACTION_KEY]);
+    const history = appendTermHistory(stored[TERM_HISTORY_KEY], historyEvent(month, state, state, message));
+    const patch = { [TERM_HISTORY_KEY]: history };
+    if (stored[USER_ACTION_KEY] && stored[USER_ACTION_KEY].month === month) patch[USER_ACTION_KEY] = null;
+    await chrome.storage.local.set(patch);
   });
 }
 
@@ -399,16 +422,22 @@ async function driveSubmitInBackgroundTab(sub) {
   const startedAt = Date.now();
   const month = sub && sub.targetMonth;
   const tracksMonthlySubmission = !!(sub && !sub.entryOnly);
+  let ownsRun = false;
+  let ownsSessionState = false;
+  let ownsSpinner = false;
   try {
     if (!month) return;
+    const prior = await chrome.storage.local.get(BACKGROUND_RUN_KEY);
+    const existingRun = prior[BACKGROUND_RUN_KEY];
+    const plan = backgroundRunPlan(existingRun, startedAt);
+    if (!plan.start) return;
+    if (plan.staleMonth) {
+      await recordBackgroundOutcome(plan.staleMonth, { timeout: true });
+      await clearBackgroundRun(existingRun.startedAt);
+    }
     if (tracksMonthlySubmission) {
-      const prior = await chrome.storage.local.get(BACKGROUND_RUN_KEY);
-      const existingRun = prior[BACKGROUND_RUN_KEY];
-      if (existingRun && Date.now() - Number(existingRun.startedAt || 0) < RETRY_TIMEOUT_MS) return;
-      if (existingRun && existingRun.month) {
-        await recordBackgroundOutcome(existingRun.month, { timeout: true });
-      }
       await recordBackgroundRunStart(month, startedAt);
+      ownsRun = true;
     }
 
     // Clear stale scan state so the workday-scan navigation always starts fresh. A prior
@@ -417,7 +446,9 @@ async function driveSubmitInBackgroundTab(sub) {
     // for a 本人用実績 link that isn't on the current (勤務表) page — the 2% stall.
     await chrome.storage.session.remove(['hrAutoProgress', 'hrScanNavStep', 'hrTermScan']);
     await chrome.storage.session.set({ hrSubmitState: sub });
+    ownsSessionState = true;
     startActivitySpinner(); // toolbar indicator: a hidden run is now working
+    ownsSpinner = true;
 
     const tab = await chrome.tabs.create({ url: MAIN_CWS_URL, active: false });
     tabId = tab.id;
@@ -427,6 +458,9 @@ async function driveSubmitInBackgroundTab(sub) {
     // or on the next alarm — rather than failing silently.
     if ((await waitForCwsOrLogin(tabId, 20000)) === false) {
       try { await chrome.storage.local.set({ hrLoginNeededSince: Date.now() }); } catch (_) {}
+      if (tracksMonthlySubmission) {
+        await recordBackgroundPause(month, 'login-required', 'ログインが必要なため、自動申請を一時停止しました。ログイン後に自動で再開します。');
+      }
       notifyLoginNeeded();
       return;
     }
@@ -442,11 +476,13 @@ async function driveSubmitInBackgroundTab(sub) {
     }
   } finally {
     if (tabId != null) { try { await chrome.tabs.remove(tabId); } catch (_) {} }
-    try { await chrome.storage.session.remove('hrSubmitState'); } catch (_) {}
-    if (tracksMonthlySubmission) {
+    if (ownsSessionState) {
+      try { await chrome.storage.session.remove('hrSubmitState'); } catch (_) {}
+    }
+    if (ownsRun) {
       try { await clearBackgroundRun(startedAt); } catch (_) {}
     }
-    await stopActivitySpinner(); // stop the toolbar spinner + restore the ready-months badge
+    if (ownsSpinner) await stopActivitySpinner(); // stop the toolbar spinner + restore the ready-months badge
     retryInProgress = false;
   }
 }

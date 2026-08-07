@@ -50,6 +50,29 @@ function sendError(message) {
   safeSessionSet({ hrAutoProgress: { running: false, error: true, message } });
 }
 
+async function setTerminalAutoProgress(progress) {
+  if (!extensionAlive()) return;
+  try {
+    await chrome.storage.session.remove(['hrSubmitState', 'hrAutoState', 'hrTermScan']);
+    await chrome.storage.session.set({ hrAutoProgress: progress });
+  } catch (_) {}
+}
+
+async function sendRetryableSubmitError(sub, message) {
+  await setTerminalAutoProgress({ running: false, error: true, retryable: true, message });
+  if (!(sub && sub.auto)) sendToPopup({ type: 'ERROR', message });
+}
+
+async function sendTerminalSubmitError(sub, message) {
+  await setTerminalAutoProgress({ running: false, error: true, message });
+  if (!(sub && sub.auto)) sendToPopup({ type: 'ERROR', message });
+}
+
+async function sendTerminalSubmitDone(message) {
+  await setTerminalAutoProgress({ running: false, done: true, text: message });
+  sendToPopup({ type: 'DONE', text: message });
+}
+
 // Ask the background service worker to raise an OS/desktop notification (works even
 // when the side panel is closed — e.g. during the unattended daily retry).
 function notify(title, message) {
@@ -1137,13 +1160,13 @@ function clearSubmit() {
 
 // Stop a submission. In unattended auto mode an expected no-op (e.g. the month is
 // already submitted / out of window) is silent; a manual run shows the message.
-function abortSubmit(sub, message) {
-  clearSubmit();
+async function abortSubmit(sub, message) {
   if (sub && sub.auto) {
-    safeSessionSet({ hrAutoProgress: { running: false, done: true, noOp: true, text: message } });
+    await setTerminalAutoProgress({ running: false, done: true, noOp: true, text: message });
     return;
   }
-  sendError(message);
+  await setTerminalAutoProgress({ running: false, error: true, message });
+  sendToPopup({ type: 'ERROR', message });
 }
 // Provisional — confirm/success pages not yet verified live (only used when not DRY_RUN).
 // The 月次申請 confirmation page = form `FormConfirmPersonalTermSubmission` + `#btnExec0`「確定」.
@@ -1217,12 +1240,11 @@ async function handleTermBlocked(sub, prevMonth, prevApproval) {
     if (hrUserActionRequired && hrUserActionRequired.month === sub.targetMonth) updates.hrUserActionRequired = null;
     await chrome.storage.local.set(updates);
   } catch (_) {}
-  safeSessionRemove('hrSubmitState');
-  safeSessionRemove('hrAutoState');
   try { chrome.runtime.sendMessage({ type: 'TERM_SCHEDULE_RETRY' }); } catch (_) {}
   const message = `${formatMonthLabel(sub.targetMonth)} は前月（${formatMonthLabel(prevMonth)}）が最終承認されていないため、まだ申請できません。承認され次第、自動で確認して申請します。`;
   emitTermHistoryEvent(sub.targetMonth, 'waiting-approval', 'waiting-approval', message);
-  sendDone(message, { waitingApproval: true });
+  await setTerminalAutoProgress({ running: false, done: true, waitingApproval: true, text: message });
+  sendToPopup({ type: 'DONE', text: message });
 }
 
 async function advanceSubmitQueue(sub, submitted, dryRun) {
@@ -1234,15 +1256,16 @@ async function advanceSubmitQueue(sub, submitted, dryRun) {
     sendProgress(`次の対象月（${formatMonthLabel(nextMonth)}）を処理します...`, submitPercent(next, 0));
     return runSubmitStateMachine(next);
   }
-  safeSessionRemove('hrSubmitState');
-  safeSessionRemove('hrAutoState');
   const n = sub.queue.length;
+  let message;
   if (dryRun) {
-    sendDone(`（テスト実行）${n}件の月次申請を申請直前まで確認しました。実際の送信は行っていません。`);
+    message = `（テスト実行）${n}件の月次申請を申請直前まで確認しました。実際の送信は行っていません。`;
   } else {
     notify('月次申請が完了しました', `${n}件の月次申請が完了しました。`);
-    sendDone(`${n}件の月次申請が完了しました。`);
+    message = `${n}件の月次申請が完了しました。`;
   }
+  await setTerminalAutoProgress({ running: false, done: true, text: message });
+  sendToPopup({ type: 'DONE', text: message });
 }
 
 async function runSubmitStateMachine(sub) {
@@ -1264,19 +1287,18 @@ async function runSubmitStateMachine(sub) {
           return runSubmitStateMachine(next);
         }
         const cur = readDisplayedTermMonth();
-        if (!cur) { sendError('勤務表の対象月を読み取れませんでした'); return clearSubmit(); }
+        if (!cur) return sendRetryableSubmitError(sub, '勤務表の対象月を読み取れませんでした');
         if (cur === sub.targetMonth) {
           const next = await updateSubmit(sub, { phase: 'submit-check-hours', navStep: null });
           return runSubmitStateMachine(next);
         }
         const count = (sub.navStep && sub.navStep.count) || 0;
         if (count > MAX_TERM_LOOKBACK + 2) {
-          sendError(`${labelOf(sub)} の勤務表へ移動できませんでした`);
-          return clearSubmit();
+          return sendRetryableSubmitError(sub, `${labelOf(sub)} の勤務表へ移動できませんでした`);
         }
         const goBack = monthDelta(sub.targetMonth, cur) < 0;
         const btn = goBack ? getTermEl('TOPRVTM') : getTermEl('TONXTTM');
-        if (!btn) { sendError('月移動ボタンが見つかりません'); return clearSubmit(); }
+        if (!btn) return sendRetryableSubmitError(sub, '月移動ボタンが見つかりません');
         await updateSubmit(sub, { navStep: { count: count + 1 } });
         sendProgress(`${labelOf(sub)}：対象月へ移動中...（現在 ${formatMonthLabel(cur)}）`, submitPercent(sub, 8));
         activateElement(btn); // full reload → re-enter
@@ -1301,13 +1323,11 @@ async function runSubmitStateMachine(sub) {
           return runSubmitStateMachine(next);
         }
         const res = detectHoursComplete(workdays);
-        if (res.error) { sendError(res.error); return clearSubmit(); }
+        if (res.error) return sendRetryableSubmitError(sub, res.error);
         if (res.complete) {
           if (sub.entryOnly) {
             // Hours-entry only — nothing to submit. We're done for this month.
-            clearSubmit();
-            sendDone(`${labelOf(sub)} の勤務時間はすべて入力済みです。`);
-            return;
+            return sendTerminalSubmitDone(`${labelOf(sub)} の勤務時間はすべて入力済みです。`);
           }
           // Hours done. Verify the previous period is approved before submitting (unless already checked).
           const next = await updateSubmit(sub, { phase: sub.prechecked ? 'submit-click' : 'submit-precheck' });
@@ -1344,7 +1364,7 @@ async function runSubmitStateMachine(sub) {
             if (r && !r.clicked) {
               const polls = (sub._scanPolls || 0) + 1;
               if (polls > 25) {
-                return abortSubmit(sub, `${labelOf(sub)} の本人用実績入力ページへ移動できませんでした。次回の自動チェックで再試行します。`);
+                return sendRetryableSubmitError(sub, `${labelOf(sub)} の本人用実績入力ページへ移動できませんでした。次回の自動チェックで再試行します。`);
               }
               setTimeout(() => { runSubmitStateMachine({ ...sub, _scanPolls: polls }); }, (r && r.waitMs) || 1000);
             }
@@ -1355,7 +1375,7 @@ async function runSubmitStateMachine(sub) {
         try {
           dates = await loadMonthForWorkdays(target); // in-page, no reload
         } catch (e) {
-          return abortSubmit(sub, `${labelOf(sub)} の平日を取得できませんでした：${e.message}`);
+          return sendRetryableSubmitError(sub, `${labelOf(sub)} の平日を取得できませんでした：${e.message}`);
         }
         await clearWorkdayScanNavStep();
         const wbm = { ...(sub.workdaysByMonth || {}), [target]: dates };
@@ -1370,7 +1390,7 @@ async function runSubmitStateMachine(sub) {
         }
         const prevMonth = monthMinus(sub.targetMonth, 1);
         const btn = getTermEl('TOPRVTM');
-        if (!btn) { sendError('前月へ移動できませんでした'); return clearSubmit(); }
+        if (!btn) return sendRetryableSubmitError(sub, '前月へ移動できませんでした');
         await updateSubmit(sub, { phase: 'submit-precheck-read', prevMonth, navStep: { count: 0 } });
         sendProgress(`${labelOf(sub)}：前月（${formatMonthLabel(prevMonth)}）の承認状況を確認中...`, submitPercent(sub, 70));
         activateElement(btn); // full reload → re-enter on submit-precheck-read
@@ -1382,10 +1402,10 @@ async function runSubmitStateMachine(sub) {
         const cur = readDisplayedTermMonth();
         if (cur !== sub.prevMonth) {
           const count = (sub.navStep && sub.navStep.count) || 0;
-          if (count > MAX_TERM_LOOKBACK + 2) { sendError('前月へ移動できませんでした'); return clearSubmit(); }
+          if (count > MAX_TERM_LOOKBACK + 2) return sendRetryableSubmitError(sub, '前月へ移動できませんでした');
           const goBack = monthDelta(sub.prevMonth, cur) < 0;
           const btn = goBack ? getTermEl('TOPRVTM') : getTermEl('TONXTTM');
-          if (!btn) { sendError('前月へ移動できませんでした'); return clearSubmit(); }
+          if (!btn) return sendRetryableSubmitError(sub, '前月へ移動できませんでした');
           await updateSubmit(sub, { navStep: { count: count + 1 } });
           activateElement(btn);
           return;
@@ -1408,7 +1428,7 @@ async function runSubmitStateMachine(sub) {
           return abortSubmit(sub, `${labelOf(sub)} は月次申請の対象外です。`);
         }
         const btn = getTermEl('BTNSBMT0');
-        if (!btn) { sendError('月次申請ボタンが見つかりません'); return clearSubmit(); }
+        if (!btn) return sendTerminalSubmitError(sub, '月次申請ボタンが見つかりません');
         if (TERM_SUBMIT_DRY_RUN) {
           console.log('[HR Term Submit] DRY-RUN: would click 月次申請 for', sub.targetMonth);
           sendProgress(`（テスト実行）${labelOf(sub)} の月次申請手前まで確認しました（未送信）。`, submitPercent(sub, 90));
@@ -1455,18 +1475,15 @@ async function runSubmitStateMachine(sub) {
           return advanceSubmitQueue(sub, true, false);
         }
         // Don't claim a success we can't confirm.
-        sendError(`${labelOf(sub)} の申請結果を確認できませんでした。勤務表でご確認ください。`);
-        return clearSubmit();
+        return sendTerminalSubmitError(sub, `${labelOf(sub)} の申請結果を確認できませんでした。勤務表でご確認ください。`);
       }
 
       default:
-        clearSubmit();
+        return sendRetryableSubmitError(sub, '月次申請の処理状態を復元できませんでした。');
     }
   } catch (err) {
     console.error('[HR Term Submit] Error:', err);
-    safeSessionRemove('hrSubmitState');
-    safeSessionRemove('hrAutoState');
-    sendError(err.message);
+    await sendRetryableSubmitError(sub, err.message);
   }
 }
 
