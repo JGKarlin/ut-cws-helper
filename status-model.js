@@ -318,9 +318,32 @@
 
   function backgroundAutomationTimeoutMs() {
     // A full month is roughly 20 workdays × three separate CWS submissions.
-    // The live site takes about 9–12 seconds per submission, so three minutes
-    // truncates normal runs. Twenty minutes includes navigation and retry margin.
-    return 20 * 60 * 1000;
+    // The live site can take more than twenty minutes for the full sequence plus
+    // the final return to 勤務表. Keep the watchdog below CWS's 60-minute session
+    // limit while leaving enough time for the extension-owned completion check.
+    return 45 * 60 * 1000;
+  }
+
+  function terminalEntryProgress(progress) {
+    const value = progress || {};
+    if (value.timeout) {
+      return {
+        running: false,
+        error: true,
+        retryable: true,
+        timeout: true,
+        message: '勤務時間の自動入力が時間内に完了しませんでした。次回の自動確認で再試行します。'
+      };
+    }
+    if (value.error) {
+      return {
+        running: false,
+        error: true,
+        retryable: true,
+        message: value.message || '勤務時間の自動入力中にエラーが発生しました。次回の自動確認で再試行します。'
+      };
+    }
+    return null;
   }
 
   function chooseReusableCwsTab(trackedTabId, tabs) {
@@ -350,6 +373,7 @@
     planCwsScanLock,
     backgroundAutomationTimeoutMs,
     chooseReusableCwsTab,
-    monthlySubmissionAlreadyHandled
+    monthlySubmissionAlreadyHandled,
+    terminalEntryProgress
   };
 });

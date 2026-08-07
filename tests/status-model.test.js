@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs, chooseReusableCwsTab, monthlySubmissionAlreadyHandled;
+let buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs, chooseReusableCwsTab, monthlySubmissionAlreadyHandled, terminalEntryProgress;
 try {
-  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs, chooseReusableCwsTab, monthlySubmissionAlreadyHandled } = require('../status-model.js'));
+  ({ buildMonthRows, statusEventsFromSnapshot, appendHistoryEvent, markMonthsStale, classifyBackgroundOutcome, planBackgroundRun, shouldClearBackgroundAction, cwsAutomationActive, cwsScanActive, shouldRunStatusScan, cwsAutomationStartupCleanupKeys, planCwsScanLock, backgroundAutomationTimeoutMs, chooseReusableCwsTab, monthlySubmissionAlreadyHandled, terminalEntryProgress } = require('../status-model.js'));
 } catch (_) {}
 
 test('skips monthly submission checks once the cached month is submitted or approved', () => {
@@ -31,7 +31,25 @@ test('reuses the tracked automation tab before any other CWS tab', () => {
 
 test('allows enough time for a complete full-month background entry run', () => {
   assert.equal(typeof backgroundAutomationTimeoutMs, 'function');
-  assert.equal(backgroundAutomationTimeoutMs(), 20 * 60 * 1000);
+  assert.equal(backgroundAutomationTimeoutMs(), 45 * 60 * 1000);
+});
+
+test('replaces stale running progress when entry-only work times out or fails', () => {
+  assert.equal(typeof terminalEntryProgress, 'function');
+  assert.deepEqual(terminalEntryProgress({ timeout: true }), {
+    running: false,
+    error: true,
+    retryable: true,
+    timeout: true,
+    message: '勤務時間の自動入力が時間内に完了しませんでした。次回の自動確認で再試行します。'
+  });
+  assert.deepEqual(terminalEntryProgress({ error: true, message: 'hidden tab closed' }), {
+    running: false,
+    error: true,
+    retryable: true,
+    message: 'hidden tab closed'
+  });
+  assert.equal(terminalEntryProgress({ done: true }), null);
 });
 
 test('serializes CWS status scans and automation runs', () => {

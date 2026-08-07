@@ -25,7 +25,7 @@ const AUTOMATION_TAB_KEY = 'hrAutomationTabId';
 const RETRY_TIMEOUT_MS = globalThis.HRStatusModel &&
   typeof globalThis.HRStatusModel.backgroundAutomationTimeoutMs === 'function'
   ? globalThis.HRStatusModel.backgroundAutomationTimeoutMs()
-  : 20 * 60 * 1000;
+  : 45 * 60 * 1000;
 const TERM_HISTORY_KEY = 'hrTermStatusHistory';
 const BACKGROUND_RUN_KEY = 'hrBackgroundRun';
 const USER_ACTION_KEY = 'hrUserActionRequired';
@@ -482,23 +482,29 @@ async function driveSubmitInBackgroundTab(sub) {
     }
 
     const progress = await waitForRetryCompletion(RETRY_TIMEOUT_MS);
-    if (tracksMonthlySubmission || progress?.timeout || progress?.error) {
-      const recordedProgress = sub.entryOnly && progress && progress.timeout
-        ? Object.assign({}, progress, {
-            message: '勤務時間の自動入力が時間内に完了しませんでした。次回の自動確認で再試行します。'
-          })
-        : progress;
-      await recordBackgroundOutcome(month, recordedProgress || { timeout: true });
+    const outcomeModel = globalThis.HRStatusModel;
+    const entryTerminal = sub.entryOnly && outcomeModel && typeof outcomeModel.terminalEntryProgress === 'function'
+      ? outcomeModel.terminalEntryProgress(progress)
+      : null;
+    if (entryTerminal) await chrome.storage.session.set({ hrAutoProgress: entryTerminal });
+    if (tracksMonthlySubmission || entryTerminal) {
+      await recordBackgroundOutcome(month, entryTerminal || progress || { timeout: true });
     }
   } catch (err) {
     if (tracksMonthlySubmission || (sub && sub.entryOnly)) {
-      await recordBackgroundOutcome(month, {
+      const rawFailure = {
         error: true,
         infrastructure: true,
         message: (err && err.message) || (sub && sub.entryOnly
           ? '勤務時間の自動入力中にエラーが発生しました。次回の自動確認で再試行します。'
           : '自動申請中にエラーが発生しました。')
-      });
+      };
+      const outcomeModel = globalThis.HRStatusModel;
+      const entryTerminal = sub && sub.entryOnly && outcomeModel && typeof outcomeModel.terminalEntryProgress === 'function'
+        ? outcomeModel.terminalEntryProgress(rawFailure)
+        : null;
+      if (entryTerminal) await chrome.storage.session.set({ hrAutoProgress: entryTerminal });
+      await recordBackgroundOutcome(month, entryTerminal || rawFailure);
     }
   } finally {
     if (tabId != null) {

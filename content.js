@@ -1195,6 +1195,39 @@ async function reportTermObservation() {
   } catch (_) {}
 }
 
+// When a current-month 勤務表 is already complete, the extension itself records that
+// authoritative live observation even if the entry worker previously timed out while
+// returning to this page. This also replaces any stale running progress with DONE.
+async function reportCurrentMonthHoursCompletion() {
+  if (!extensionAlive() || !isTermPage()) return;
+  const month = readDisplayedTermMonth();
+  if (!month || month !== currentMonthKey()) return;
+
+  let local;
+  let session;
+  try {
+    local = await chrome.storage.local.get('hrAutoEntryEnabled');
+    session = await chrome.storage.session.get(['hrSubmitState', 'hrAutoState', 'hrScanActive']);
+  } catch (_) { return; }
+  if (!local.hrAutoEntryEnabled || session.hrSubmitState || session.hrAutoState || session.hrScanActive) return;
+
+  const scheduled = detectScheduledWorkdays(month);
+  if (scheduled.error) return;
+  const result = detectHoursComplete(scheduled.dates);
+  if (result.error || !result.complete) return;
+
+  const completionModel = globalThis.HRTermHours;
+  if (!completionModel || typeof completionModel.completedHoursMessage !== 'function') return;
+  const message = completionModel.completedHoursMessage(month, scheduled.dates.length);
+  const recorded = await emitTermHistoryEvent(month, 'hours-complete', 'hours-complete', message);
+  if (!recorded) return;
+  try {
+    await chrome.storage.session.set({
+      hrAutoProgress: { running: false, done: true, text: message }
+    });
+  } catch (_) {}
+}
+
 // Navigate toward the 勤務表: メインメニュー → 就労管理(text) → 勤務表(text).
 // Returns the popup-poll shape: { ready } | { navigating, step, waitMs }.
 async function prepareTermPage() {
@@ -1697,6 +1730,7 @@ runStateMachine();
 // Passive readiness signal for the toolbar badge / one-time notification (read-only,
 // independent of the state machine; self-skips off the 勤務表 and during automation).
 setTimeout(() => { reportTermObservation(); }, 1500);
+setTimeout(() => { reportCurrentMonthHoursCompletion(); }, 2000);
 
 // This content script only runs on CWS pages (login lives on a different host), so
 // reaching here means the session is valid. Tell the background in case a background
