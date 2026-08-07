@@ -8,6 +8,7 @@
     const values = Array.isArray(labels) ? labels : [];
     if (values.some(t => t.includes('本人用実績入力'))) return 'input';
     if (values.some(t => t.includes('本人用実績') && !t.includes('本人用実績入力'))) return 'performance';
+    if (values.some(t => t === '勤務表') && values.some(t => t === '就労申請')) return 'work-menu-unavailable';
     if (values.some(t => t.includes('就労メインページ') || t.includes('本人用メニュー') || t.includes('メインページ'))) return 'menu';
     if (values.some(t => t === '就労管理')) return 'work';
     return 'main';

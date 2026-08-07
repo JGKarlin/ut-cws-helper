@@ -15,3 +15,10 @@ test('chooses the 就労管理 first hop on the CWS main menu', () => {
 test('does not fall back to reloading main when 就労管理 is present', () => {
   assert.notEqual(chooseWorkdayNavigationAction(['就労管理'], false), 'main');
 });
+
+test('does not click 就労メインページ when the workday menu is unavailable', () => {
+  assert.equal(
+    chooseWorkdayNavigationAction(['就労メインページ', '勤務表', '就労申請'], false),
+    'work-menu-unavailable'
+  );
+});

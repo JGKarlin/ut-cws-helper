@@ -694,6 +694,15 @@ async function clickWorkdayCalendarLink() {
     return { ready: true };
   }
 
+  if (navigationAction === 'work-menu-unavailable') {
+    return {
+      navigating: true,
+      clicked: false,
+      step: '本人用実績入力はこのアカウントの就労管理メニューにありません',
+      waitMs: 1000
+    };
+  }
+
   const actionDetails = {
     input: {
       matches: t => t.includes('本人用実績入力'),
