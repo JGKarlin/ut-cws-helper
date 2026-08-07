@@ -1,10 +1,22 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-let isFullDayPaidLeave, findMissingWorkdays, findScheduledWorkdays, planMissingEntries, advancePlannedEntryState;
+let isFullDayPaidLeave, findMissingWorkdays, findScheduledWorkdays, planMissingEntries, advancePlannedEntryState, completedHoursMessage;
 try {
-  ({ isFullDayPaidLeave, findMissingWorkdays, findScheduledWorkdays, planMissingEntries, advancePlannedEntryState } = require('../term-hours-model.js'));
+  ({ isFullDayPaidLeave, findMissingWorkdays, findScheduledWorkdays, planMissingEntries, advancePlannedEntryState, completedHoursMessage } = require('../term-hours-model.js'));
 } catch (_) {}
+
+test('describes a fully verified month in recent history', () => {
+  assert.equal(typeof completedHoursMessage, 'function');
+  assert.equal(
+    completedHoursMessage('2026-08', 20),
+    '2026年8月分：勤務時間の入力完了（20勤務日）。出勤・退勤・勤務外時間数を確認済み。'
+  );
+  assert.equal(
+    completedHoursMessage('2026-08', Number.NaN),
+    '2026年8月分：勤務時間の入力完了（0勤務日）。出勤・退勤・勤務外時間数を確認済み。'
+  );
+});
 
 test('excludes full-day paid leave from missing work time', () => {
   assert.equal(typeof findMissingWorkdays, 'function');

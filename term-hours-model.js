@@ -79,6 +79,14 @@
     });
   }
 
+  function completedHoursMessage(monthKey, workdayCount) {
+    const match = /^(\d{4})-(\d{2})$/.exec(String(monthKey || ''));
+    const label = match ? `${match[1]}年${Number(match[2])}月分` : `${String(monthKey || '')}分`;
+    const numericCount = Number(workdayCount);
+    const count = Number.isFinite(numericCount) ? Math.max(0, Math.floor(numericCount)) : 0;
+    return `${label}：勤務時間の入力完了（${count}勤務日）。出勤・退勤・勤務外時間数を確認済み。`;
+  }
+
   function findScheduledWorkdays(monthKey, rowFacts) {
     if (!/^\d{4}-\d{2}$/.test(String(monthKey || ''))) return [];
     const [year, month] = String(monthKey).split('-').map(Number);
@@ -105,6 +113,7 @@
     findMissingWorkdays,
     findScheduledWorkdays,
     planMissingEntries,
-    advancePlannedEntryState
+    advancePlannedEntryState,
+    completedHoursMessage
   };
 });

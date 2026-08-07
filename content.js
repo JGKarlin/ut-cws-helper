@@ -1424,7 +1424,11 @@ async function runSubmitStateMachine(sub) {
         if (res.complete) {
           if (sub.entryOnly) {
             // Hours-entry only — nothing to submit. We're done for this month.
-            const message = `${labelOf(sub)} の勤務時間はすべて入力済みです（${workdays.length}勤務日）。`;
+            const completionModel = globalThis.HRTermHours;
+            if (!completionModel || typeof completionModel.completedHoursMessage !== 'function') {
+              return sendRetryableSubmitError(sub, '勤務時間の完了履歴モデルを読み込めませんでした');
+            }
+            const message = completionModel.completedHoursMessage(sub.targetMonth, workdays.length);
             emitTermHistoryEvent(sub.targetMonth, 'hours-complete', 'hours-complete', message);
             return sendTerminalSubmitDone(message);
           }
