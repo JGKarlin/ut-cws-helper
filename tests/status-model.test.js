@@ -77,3 +77,35 @@ test('drops future history events outside the current 12-month window', () => {
   assert.equal(retained.some(event => event.month === '2026-09'), false);
   assert.equal(retained.some(event => event.month === '2026-08'), true);
 });
+
+test('provides explicit Japanese copy for submitted June and waiting July', () => {
+  const rows = buildMonthRows({
+    currentMonth: '2026-08',
+    months: {
+      '2026-06': { month: '2026-06', approval: 'pending', submitted: true, submittable: false },
+      '2026-07': { month: '2026-07', approval: 'none', submittable: true }
+    },
+    pending: { targetMonth: '2026-07', prevMonth: '2026-06' },
+    autoSubmitEnabled: true
+  });
+
+  assert.equal(rows.find(row => row.month === '2026-06').message, '2026年6月分：提出済み（承認待ち）');
+  assert.match(rows.find(row => row.month === '2026-07').message, /2026年6月分の承認待ち/);
+});
+
+test('uses a fresh CWS-ready month instead of stale persisted action state', () => {
+  const rows = buildMonthRows({
+    currentMonth: '2026-08',
+    months: {
+      '2026-06': { month: '2026-06', approval: 'approved', submitted: true, submittable: false, fresh: true },
+      '2026-07': { month: '2026-07', approval: 'none', submittable: true, fresh: true }
+    },
+    pending: { targetMonth: '2026-07', prevMonth: '2026-06' },
+    userAction: { month: '2026-07', message: '古い失敗' },
+    autoSubmitEnabled: true
+  });
+
+  const july = rows.find(row => row.month === '2026-07');
+  assert.equal(july.state, 'ready-auto');
+  assert.equal(july.message, '2026年7月分：自動申請の準備ができました。');
+});

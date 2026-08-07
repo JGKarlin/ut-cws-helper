@@ -1088,6 +1088,15 @@ async function termScanStep() {
   const r = await chrome.storage.session.get('hrTermScan');
   const scan = r.hrTermScan || { collected: {}, steps: 0 };
   scan.collected[month] = { month, label: formatMonthLabel(month), submittable: isMonthSubmittable(), approval: readTermApprovalStatus() };
+  if (isPrevApprovedOnTermPage()) {
+    const previousMonth = monthMinus(month, 1);
+    scan.collected[previousMonth] = Object.assign({}, scan.collected[previousMonth], {
+      month: previousMonth,
+      label: formatMonthLabel(previousMonth),
+      submittable: false,
+      approval: 'approved'
+    });
+  }
   scan.steps = (scan.steps || 0) + 1;
   const pastClosed = monthDelta(month, current) < 0 && !scan.collected[month].submittable;
   if (pastClosed || scan.steps >= MAX_TERM_LOOKBACK) {

@@ -590,6 +590,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 // ── 月次申請 (monthly report submission) ──────────────────────────────────────
 const TERM_CACHE_KEY = 'hrTermStatusCache';
+const TERM_HISTORY_KEY = 'hrTermStatusHistory';
 const TERM_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_TERM_CONFIG = {
   arriveRange: { earlyH: 8, earlyM: 45, lateH: 10, lateM: 0 },
@@ -632,7 +633,7 @@ async function runTermScan(tabId, deadlineMs = 70000) {
   while (Date.now() < deadline) {
     const res = await sendMessageWithRetry(tabId, { type: 'SCAN_TERM_STATUS_STEP' }, 12000);
     if (res && res.error) throw new Error(res.error);
-    if (res && res.done) return res.months || {};
+    if (res && res.done) return { months: res.months || {}, currentMonth: res.current };
     setTermStatus((res && res.step) || '確認中...');
     try { await waitForTabComplete(tabId, 6000); } catch (_) {}
     await delay(res && res.waitMs ? res.waitMs : 1200);
@@ -649,21 +650,79 @@ function setTermStatus(text) {
   status.textContent = text;
 }
 
+function isTermCacheFresh(cache) {
+  return !!(cache && cache.currentMonth === thisCalendarMonthKey() && cache.scannedAt &&
+    (Date.now() - cache.scannedAt) < TERM_CACHE_TTL_MS);
+}
+
+function mergedTermMonths(previousMonths, liveMonths) {
+  const merged = {};
+  Object.entries(previousMonths || {}).forEach(([month, entry]) => {
+    if (!entry) return;
+    merged[month] = Object.assign({}, entry, { month: entry.month || month, stale: true, fresh: false, source: 'stale' });
+  });
+  Object.entries(liveMonths || {}).forEach(([month, entry]) => {
+    if (!entry) return;
+    merged[month] = Object.assign({}, entry, {
+      month: entry.month || month,
+      stale: false,
+      staleFallback: false,
+      fresh: true,
+      source: 'live'
+    });
+  });
+  return merged;
+}
+
+function appendScanHistory(history, previousMonths, nextMonths, currentMonth, observedAt) {
+  const oldestMonth = termMonthMinus(currentMonth, 11);
+  let result = (Array.isArray(history) ? history : []).filter(event =>
+    event && event.month && event.month >= oldestMonth && event.month <= currentMonth
+  );
+  const model = globalThis.HRStatusModel;
+  if (!model) return result;
+  model.statusEventsFromSnapshot(previousMonths, nextMonths, observedAt).forEach(event => {
+    result = model.appendHistoryEvent(result, event, currentMonth);
+  });
+  return result;
+}
+
+async function loadTermRenderState() {
+  const stored = await chrome.storage.local.get([
+    'hrPendingSubmit',
+    'hrBackgroundRun',
+    'hrUserActionRequired',
+    TERM_AUTO_KEY
+  ]);
+  return {
+    pending: stored.hrPendingSubmit,
+    activeRun: stored.hrBackgroundRun,
+    userAction: stored.hrUserActionRequired,
+    autoSubmitEnabled: !!stored[TERM_AUTO_KEY]
+  };
+}
+
+function pendingIsSatisfiedByFreshScan(pending, months) {
+  if (!pending || !pending.targetMonth || !pending.prevMonth) return false;
+  const previous = months && months[pending.prevMonth];
+  return !!(previous && previous.fresh === true && previous.approval === 'approved');
+}
+
 async function discoverTermStatus(isOnDomain) {
-  const { hrPendingSubmit } = await chrome.storage.local.get('hrPendingSubmit');
+  const renderState = await loadTermRenderState();
   let cache = (await chrome.storage.local.get(TERM_CACHE_KEY))[TERM_CACHE_KEY];
-  const fresh = cache && cache.currentMonth === thisCalendarMonthKey() &&
-    cache.scannedAt && (Date.now() - cache.scannedAt) < TERM_CACHE_TTL_MS;
+  const fresh = isTermCacheFresh(cache);
 
   // When a submission is pending (blocked on the previous month's approval), don't trust
   // a fresh cache — re-scan so a since-granted 最終承認 is picked up and the block lifts.
-  if ((fresh && !hrPendingSubmit) || !isOnDomain) {
-    renderTermSection(cache, hrPendingSubmit);
+  if ((fresh && !renderState.pending) || !isOnDomain) {
+    const history = (await chrome.storage.local.get(TERM_HISTORY_KEY))[TERM_HISTORY_KEY];
+    renderTermSection(cache, renderState, history);
     return;
   }
 
   setTermStatus('未提出の月を確認中...');
-  document.getElementById('termList').innerHTML = '';
+  document.getElementById('termCurrentStatus').replaceChildren();
 
   await chrome.storage.session.set({ hrScanActive: true, hrScanStartedAt: Date.now() });
   let tabId = null;
@@ -672,130 +731,157 @@ async function discoverTermStatus(isOnDomain) {
     tabId = tab.id;
     await waitForTabComplete(tabId);
     await prepareTermTab(tabId);
-    const months = await runTermScan(tabId);
+    const scan = await runTermScan(tabId);
     await chrome.tabs.remove(tabId).catch(() => {});
     tabId = null;
-    cache = { scannedAt: Date.now(), currentMonth: thisCalendarMonthKey(), months: months || {} };
-    await chrome.storage.local.set({ [TERM_CACHE_KEY]: cache });
+    const scannedAt = Date.now();
+    const previousMonths = (cache && cache.months) || {};
+    const months = mergedTermMonths(previousMonths, scan.months);
+    const currentMonth = scan.currentMonth || thisCalendarMonthKey();
+    cache = { scannedAt, currentMonth, months };
+    const oldHistory = (await chrome.storage.local.get(TERM_HISTORY_KEY))[TERM_HISTORY_KEY];
+    const history = appendScanHistory(oldHistory, previousMonths, months, currentMonth, scannedAt);
+    await chrome.storage.local.set({ [TERM_CACHE_KEY]: cache, [TERM_HISTORY_KEY]: history });
+    if (pendingIsSatisfiedByFreshScan(renderState.pending, months)) {
+      await chrome.storage.local.remove('hrPendingSubmit');
+      try { chrome.runtime.sendMessage({ type: 'TERM_CLEAR_RETRY' }); } catch (_) {}
+    }
   } catch (err) {
     if (tabId !== null) await chrome.tabs.remove(tabId).catch(() => {});
     // Fall back to whatever we have (old cache / pending only).
-    renderTermSection(cache, hrPendingSubmit, '未提出の月を確認できませんでした。');
+    const history = (await chrome.storage.local.get(TERM_HISTORY_KEY))[TERM_HISTORY_KEY];
+    renderTermSection(cache, renderState, history, '未提出の月を確認できませんでした。');
     return;
   } finally {
     await chrome.storage.session.remove(['hrScanActive', 'hrScanStartedAt']);
   }
 
-  renderTermSection(cache, hrPendingSubmit);
+  const history = (await chrome.storage.local.get(TERM_HISTORY_KEY))[TERM_HISTORY_KEY];
+  renderTermSection(cache, await loadTermRenderState(), history);
 }
 
-function renderTermSection(cache, pending, failMsg) {
+function isStaleRow(row, staleFallback) {
+  return staleFallback || row.stale === true || row.staleFallback === true || row.fresh === false || row.source === 'stale';
+}
+
+function appendTermStatusRow(container, row, staleFallback) {
+  const documentRef = container.ownerDocument;
+  const item = documentRef.createElement('div');
+  item.className = `term-row term-row--${row.state}`;
+  const message = documentRef.createElement('div');
+  message.textContent = row.message;
+  item.appendChild(message);
+
+  if (isStaleRow(row, staleFallback)) {
+    const stale = documentRef.createElement('div');
+    stale.className = 'term-stale';
+    stale.textContent = '前回確認時の情報です';
+    item.appendChild(stale);
+  }
+
+  if (row.state === 'user-action-required' && row.actionMonth) {
+    const button = documentRef.createElement('button');
+    button.className = 'btn btn-start term-submit-btn';
+    button.dataset.month = row.actionMonth;
+    button.textContent = `▶ ${formatTermLabel(row.actionMonth)}分を確認して申請`;
+    item.appendChild(button);
+  }
+  container.appendChild(item);
+}
+
+function historyOutcome(event) {
+  if (event.message) return event.message;
+  switch (event.state) {
+    case 'submitted-pending': return '提出済み（承認待ち）';
+    case 'approved': return '最終承認済み';
+    case 'returned': return '差戻し';
+    case 'waiting-approval': return '前月の承認待ち';
+    case 'processing': return '自動処理を開始';
+    case 'ready-auto': return '自動申請の準備完了';
+    case 'user-action-required': return '確認が必要';
+    default: return event.state || event.type || '状態を確認しました';
+  }
+}
+
+function historyTimestamp(at) {
+  const date = new Date(Number(at));
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function renderTermHistory(history, currentMonth) {
+  const container = document.getElementById('termHistory');
+  container.replaceChildren();
+  const title = document.createElement('div');
+  title.className = 'term-history-title';
+  title.textContent = '最近の履歴';
+  container.appendChild(title);
+
+  const oldestMonth = termMonthMinus(currentMonth, 11);
+  const events = (Array.isArray(history) ? history : [])
+    .filter(event => event && event.month && event.month >= oldestMonth && event.month <= currentMonth)
+    .sort((left, right) => Number(right.at || 0) - Number(left.at || 0));
+  if (!events.length) {
+    const empty = document.createElement('div');
+    empty.className = 'term-history-empty';
+    empty.textContent = '履歴はまだありません。';
+    container.appendChild(empty);
+    return;
+  }
+  events.forEach(event => {
+    const item = document.createElement('div');
+    item.className = 'term-history-item';
+    const at = historyTimestamp(event.at);
+    if (at) {
+      const time = document.createElement('span');
+      time.className = 'term-history-time';
+      time.textContent = at;
+      item.appendChild(time);
+    }
+    const outcome = document.createElement('span');
+    outcome.textContent = `${formatTermLabel(event.month)}分：${historyOutcome(event)}`;
+    item.appendChild(outcome);
+    container.appendChild(item);
+  });
+}
+
+function renderTermSection(cache, renderState, history, failMsg) {
   const card = document.getElementById('termCard');
   const status = document.getElementById('termStatus');
-  const list = document.getElementById('termList');
+  const currentStatus = document.getElementById('termCurrentStatus');
   if (!card) return;
-  list.innerHTML = '';
+  currentStatus.replaceChildren();
 
   const current = (cache && cache.currentMonth) || thisCalendarMonthKey();
   const months = (cache && cache.months) || {};
-
-  // Self-heal a stale block: if the pending month's previous month is now 最終承認 (per
-  // the fresh scan), the dependency is satisfied — drop the stale pending record and let
-  // the month render as a normal submittable candidate instead of the "承認待ち" banner.
-  if (pending && pending.targetMonth && pending.prevMonth) {
-    const prevApproval = (months[pending.prevMonth] || {}).approval;
-    if (prevApproval === 'approved') {
-      chrome.storage.local.remove('hrPendingSubmit');
-      try { chrome.runtime.sendMessage({ type: 'TERM_CLEAR_RETRY' }); } catch (_) {}
-      pending = null;
-    }
-  }
-
-  const candidates = Object.values(months)
-    .filter(m => m.submittable && m.month < current &&
-      (m.approval === 'none' || m.approval === 'returned' || !m.approval))
-    .sort((a, b) => (a.month < b.month ? 1 : -1)); // newest first
-
-  // Submitted but not yet 最終承認 → positive confirmation (recent months only). Covers
-  // both the plugin path (submitted:true) and a manual/observed submit (approval pending,
-  // no longer submittable).
-  const submitted = Object.values(months)
-    .filter(m => m && m.month && m.month < current && m.month >= termMonthMinus(current, 2) &&
-      (m.submitted === true || (m.approval === 'pending' && !m.submittable)))
-    .sort((a, b) => (a.month < b.month ? 1 : -1));
-
-  let shownButton = false;
-  let shownAny = false;
-
-  if (pending && pending.targetMonth) {
-    shownAny = true;
-    const div = document.createElement('div');
-    div.className = 'term-item term-blocked';
-    div.innerHTML = `<span class="term-month">${formatTermLabel(pending.targetMonth)}</span>：前月（${formatTermLabel(pending.prevMonth)}）の承認待ち。承認後に自動申請します。`;
-    list.appendChild(div);
-  }
-
-  for (const m of submitted) {
-    shownAny = true;
-    const div = document.createElement('div');
-    div.className = 'term-item term-done';
-    div.innerHTML = `<span class="term-done-check">✓</span> <span class="term-month">${formatTermLabel(m.month)}</span>分の勤務実績を提出しました（承認待ち）。`;
-    list.appendChild(div);
-  }
-
-  for (const m of candidates) {
-    if (pending && pending.targetMonth === m.month) continue;
-    if (submitted.some(s => s.month === m.month)) continue;
-    shownAny = true;
-    shownButton = true;
-    const wrap = document.createElement('div');
-    wrap.className = 'term-item';
-
-    const prevApproval = (months[termMonthMinus(m.month, 1)] || {}).approval;
-    const btn = document.createElement('button');
-    btn.className = 'btn btn-start term-submit-btn';
-    btn.dataset.month = m.month;
-    btn.textContent = `▶ ${m.label}分を申請`;
-    wrap.appendChild(btn);
-
-    if (prevApproval && prevApproval !== 'approved') {
-      const note = document.createElement('div');
-      note.className = 'term-hint';
-      note.textContent = `※前月（${formatTermLabel(termMonthMinus(m.month, 1))}）未承認。承認後に自動申請。`;
-      wrap.appendChild(note);
-    }
-    list.appendChild(wrap);
-  }
+  const model = globalThis.HRStatusModel;
+  const rows = model ? model.buildMonthRows(Object.assign({ currentMonth: current, months }, renderState || {})) : [];
+  const staleFallback = !!failMsg || !isTermCacheFresh(cache);
+  rows.forEach(row => appendTermStatusRow(currentStatus, row, staleFallback));
+  renderTermHistory(history, current);
 
   card.style.display = 'block';
-  if (shownButton) {
-    status.style.display = 'none';
-    const hint = document.createElement('div');
-    hint.className = 'term-hint';
-    hint.textContent = '※月次申請は取り消せません。';
-    list.appendChild(hint);
-  } else if (shownAny) {
-    status.style.display = 'none';
-  } else if (failMsg) {
+  if (staleFallback) {
     status.style.display = 'block';
-    status.textContent = failMsg;
+    status.textContent = failMsg || '前回の確認結果を表示しています。';
+  } else if (!rows.length) {
+    status.style.display = 'block';
+    status.textContent = '月次申請の状況はまだありません。';
   } else {
-    status.style.display = 'block';
-    status.textContent = '未提出の月はありません。';
+    status.style.display = 'none';
   }
 
   // Refresh the toolbar badge / one-time notification from the latest status.
   try { chrome.runtime.sendMessage({ type: 'TERM_STATUS_REFRESHED' }); } catch (_) {}
 }
 
-// Live-update the term card when the status cache / pending record changes (e.g. a
-// submission completes) so it reflects "提出しました" without the panel being reopened.
+// Live-update the term card when the status ledger state changes.
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== 'local') return;
-  if (!changes[TERM_CACHE_KEY] && !changes.hrPendingSubmit) return;
-  const cache = (await chrome.storage.local.get(TERM_CACHE_KEY))[TERM_CACHE_KEY];
-  const { hrPendingSubmit } = await chrome.storage.local.get('hrPendingSubmit');
-  renderTermSection(cache, hrPendingSubmit);
+  if (!changes[TERM_CACHE_KEY] && !changes[TERM_HISTORY_KEY] && !changes.hrPendingSubmit &&
+      !changes.hrBackgroundRun && !changes.hrUserActionRequired && !changes[TERM_AUTO_KEY]) return;
+  const stored = await chrome.storage.local.get([TERM_CACHE_KEY, TERM_HISTORY_KEY]);
+  renderTermSection(stored[TERM_CACHE_KEY], await loadTermRenderState(), stored[TERM_HISTORY_KEY]);
 });
 
 async function startTermSubmission(queue) {
@@ -865,7 +951,7 @@ async function startTermSubmission(queue) {
   }
 }
 
-document.getElementById('termList').addEventListener('click', (e) => {
+document.getElementById('termCurrentStatus').addEventListener('click', (e) => {
   const btn = e.target.closest('.term-submit-btn');
   if (!btn || !btn.dataset.month) return;
   startTermSubmission([btn.dataset.month]);
@@ -926,54 +1012,9 @@ const TERM_ENTRY_KEY = 'hrAutoEntryEnabled';
   });
 })();
 
-// ── Auto-prompt on detect (paired with the manual button) ─────────────────────
-const TERM_PROMPTED_KEY = 'hrAutoPromptedMonths';
-
-// Same "ready for manual submission" rule the background uses for the toolbar badge.
-function computeReadyMonths(cache, pendingMonth) {
-  const months = (cache && cache.months) || {};
-  const current = (cache && cache.currentMonth) || thisCalendarMonthKey();
-  const ready = [];
-  for (const m of Object.values(months)) {
-    if (!m || !m.month) continue;
-    if (!m.submittable) continue;
-    if (!(m.month < current)) continue;
-    if (!(m.approval === 'none' || m.approval === 'returned' || !m.approval)) continue;
-    if (pendingMonth && pendingMonth === m.month) continue;
-    const prev = months[termMonthMinus(m.month, 1)];
-    if (!prev || prev.approval !== 'approved') continue;
-    ready.push(m.month);
-  }
-  return ready.sort();
-}
-
-// When the panel opens and a month is ready, pop the confirm dialog automatically —
-// but only when 毎月自動で申請する is OFF (else the background submits silently and a
-// prompt would just race it), only on the CWS domain, and at most once per month (the
-// button stays available for any later run).
-async function maybeAutoPromptManual(isOnDomain) {
-  if (!isOnDomain) return;
-  try {
-    const prog = (await chrome.storage.session.get('hrAutoProgress')).hrAutoProgress;
-    if (prog && prog.running) return; // a run is already in progress
-    const enabled = (await chrome.storage.local.get(TERM_AUTO_KEY))[TERM_AUTO_KEY];
-    if (enabled) return;
-    const cache = (await chrome.storage.local.get(TERM_CACHE_KEY))[TERM_CACHE_KEY];
-    const { hrPendingSubmit } = await chrome.storage.local.get('hrPendingSubmit');
-    const ready = computeReadyMonths(cache, hrPendingSubmit && hrPendingSubmit.targetMonth);
-    if (!ready.length) return;
-    const prompted = (await chrome.storage.local.get(TERM_PROMPTED_KEY))[TERM_PROMPTED_KEY] || [];
-    const target = ready.find(mo => !prompted.includes(mo));
-    if (!target) return;
-    await chrome.storage.local.set({ [TERM_PROMPTED_KEY]: [...prompted, target] });
-    startTermSubmission([target]); // shows the one confirm dialog, then runs automatically
-  } catch (_) {}
-}
-
-// Kick off discovery on popup open (scan only when on the CWS domain / logged in).
+// Kick off read-only discovery on popup open (scan only when on the CWS domain / logged in).
 (async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const onDomain = !!(tab && tab.url && tab.url.includes('ut-ppsweb.adm.u-tokyo.ac.jp'));
   await discoverTermStatus(onDomain);
-  maybeAutoPromptManual(onDomain);
 })();

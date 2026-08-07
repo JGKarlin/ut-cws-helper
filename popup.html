@@ -201,6 +201,22 @@
     .term-item { margin-bottom: 8px; }
     .term-item:last-child { margin-bottom: 0; }
     .term-submit-btn { width: 100%; }
+    .term-current-status { display: grid; gap: 8px; }
+    .term-row {
+      padding: 8px 10px; border: 1px solid #dde3ec; border-radius: 6px;
+      background: #fafbfd; color: #364152; font-size: 11px; line-height: 1.55;
+    }
+    .term-row--submitted-pending, .term-row--approved { background: #e9f7ef; border-color: #a3dcb8; color: #1e7a44; }
+    .term-row--waiting-approval { background: #fff8e6; border-color: #f3d27a; color: #8a6d1a; }
+    .term-row--processing { background: #eef2fa; border-color: #b8c9e9; color: #1a3a6b; }
+    .term-row--user-action-required { background: #fff5f5; border-color: #f8b4b4; color: #a92d24; }
+    .term-stale { display: inline-block; margin-top: 4px; color: #8a6d1a; font-size: 10px; font-weight: 600; }
+    .term-history { margin-top: 12px; border-top: 1px solid #e8ecf4; padding-top: 10px; }
+    .term-history-title { color: #6b7a90; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; margin-bottom: 6px; }
+    .term-history-item { padding: 6px 0; border-bottom: 1px solid #edf0f5; color: #4a5568; font-size: 10px; line-height: 1.45; }
+    .term-history-item:last-child { border-bottom: none; }
+    .term-history-time { color: #8b96a8; display: block; margin-bottom: 1px; }
+    .term-history-empty { color: #9aa5b4; font-size: 10px; }
     .term-blocked {
       padding: 8px 10px; border-radius: 6px; background: #fff8e6;
       border: 1px solid #f3d27a; color: #8a6d1a; font-size: 11px; line-height: 1.55;
@@ -271,7 +287,8 @@
       <span>毎月自動で申請する</span>
     </label>
     <div id="termStatus" class="term-status">未提出の月を確認中...</div>
-    <div id="termList"></div>
+    <div id="termCurrentStatus" class="term-current-status"></div>
+    <div id="termHistory" class="term-history"></div>
   </div>
 
   <!-- 勤務時間の自動入力 (current month) — independent of 月次申請 -->
@@ -393,6 +410,7 @@
 
   </div>
 
+  <script src="status-model.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

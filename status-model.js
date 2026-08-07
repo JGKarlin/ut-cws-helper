@@ -55,8 +55,33 @@
   function hasAuthoritativeLiveStatus(entry) {
     const value = entry || {};
     if (value.stale === true || value.staleFallback === true || value.fresh === false || value.source === 'stale') return false;
+    if (value.fresh === true || value.source === 'live') return true;
     const approval = String(value.approval || '').toLowerCase();
     return value.submitted === true || (approval !== '' && approval !== 'none');
+  }
+
+  function formatMonthLabel(month) {
+    const match = MONTH_PATTERN.exec(String(month || ''));
+    return match ? match[1] + '年' + Number(match[2]) + '月' : String(month || '');
+  }
+
+  function messageForState(month, state, pending, userAction) {
+    const label = formatMonthLabel(month) + '分';
+    const previous = pending && pending.targetMonth === month && pending.prevMonth
+      ? formatMonthLabel(pending.prevMonth) + '分' : '';
+    switch (state) {
+      case 'submitted-pending': return label + '：提出済み（承認待ち）';
+      case 'approved': return label + '：最終承認済みです。';
+      case 'returned': return label + '：差戻しです。自動処理を確認中です。';
+      case 'waiting-approval': return previous
+        ? label + '：' + previous + 'の承認待ち。承認後に自動申請します。'
+        : label + '：前月の承認待ち。承認後に自動申請します。';
+      case 'processing': return label + '：自動申請を処理中です。';
+      case 'ready-auto': return label + '：自動申請の準備ができました。';
+      case 'ready': return label + '：申請の準備ができました。';
+      case 'user-action-required': return label + '：' + ((userAction && userAction.message) || '確認が必要です。');
+      default: return label + '：申請対象外です。';
+    }
   }
 
   function referenceMonths(input) {
@@ -109,7 +134,11 @@
         }
       }
 
-      const row = Object.assign({}, entry, { month, state });
+      const row = Object.assign({}, entry, {
+        month,
+        state,
+        message: messageForState(month, state, pending, userAction)
+      });
       if (state === 'user-action-required') {
         row.actionMonth = month;
         row.actionMessage = userAction.message || '';
